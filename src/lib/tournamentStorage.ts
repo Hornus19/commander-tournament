@@ -25,6 +25,7 @@ export type Tournament = {
   location: string
   players: Player[]
   rounds: TournamentRound[]
+  activeRoundId?: string
 }
 
 const LEGACY_STORAGE_KEY = 'commander-tournament:tournaments'
@@ -100,6 +101,8 @@ function isTournament(value: unknown): value is StoredTournament {
     typeof value.location === 'string' &&
     Array.isArray(value.players) &&
     value.players.every(isPlayer) &&
+    (value.activeRoundId === undefined ||
+      typeof value.activeRoundId === 'string') &&
     (value.rounds === undefined ||
       (Array.isArray(value.rounds) && value.rounds.every(isTournamentRound)))
   )) {

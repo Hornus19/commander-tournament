@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from 'react'
 import type { Session, SupabaseClient } from '@supabase/supabase-js'
 import {
   migrateLegacyTournaments,
@@ -21,6 +28,13 @@ import {
   type TournamentRecord,
 } from './lib/tournamentRepository'
 import './App.css'
+
+const PublicTournamentManager = lazy(
+  () => import('./components/PublicTournamentManager'),
+)
+const PublicTournamentScreen = lazy(
+  () => import('./components/PublicTournamentScreen'),
+)
 
 type TournamentConflict = {
   id: string
@@ -1450,11 +1464,13 @@ function TournamentWorkspace({
   }
 
   function createRound() {
+    const roundId = crypto.randomUUID()
     updateSelectedTournament((tournament) => ({
       ...tournament,
+      activeRoundId: roundId,
       rounds: [
         ...tournament.rounds,
-        { id: crypto.randomUUID(), pods: [] },
+        { id: roundId, pods: [] },
       ],
     }))
   }
@@ -1542,6 +1558,7 @@ function TournamentWorkspace({
 
     const saved = await updateSelectedTournament((tournament) => ({
       ...tournament,
+      ...(roundId === null ? { activeRoundId: generatedRoundId } : {}),
       rounds:
         roundId === null
           ? [...tournament.rounds, { id: generatedRoundId, pods }]
@@ -2353,6 +2370,20 @@ function TournamentWorkspace({
                   </button>
                 )}
 
+                <Suspense
+                  fallback={
+                    <p aria-live="polite" className="mb-6 text-sm text-slate-300" role="status">
+                      Cargando controles del tablero público…
+                    </p>
+                  }
+                >
+                  <PublicTournamentManager
+                    adminSaving={adminSaving}
+                    key={selectedTournament.id}
+                    tournamentId={selectedTournament.id}
+                  />
+                </Suspense>
+
                 <form
                   className="mb-6 flex flex-col gap-3 sm:flex-row"
                   onSubmit={addPlayer}
@@ -2583,6 +2614,29 @@ function TournamentWorkspace({
                                 Ronda {roundIndex + 1}
                               </h3>
                               <div className="flex flex-wrap gap-2">
+                                <button
+                                  aria-pressed={
+                                    selectedTournament.activeRoundId === round.id
+                                  }
+                                  className="rounded-md border border-emerald-300/40 px-3 py-2 text-sm font-medium text-emerald-200 transition hover:bg-emerald-300/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                  disabled={
+                                    adminSaving ||
+                                    selectedTournament.activeRoundId === round.id
+                                  }
+                                  onClick={() =>
+                                    void updateSelectedTournament(
+                                      (tournament) => ({
+                                        ...tournament,
+                                        activeRoundId: round.id,
+                                      }),
+                                    )
+                                  }
+                                  type="button"
+                                >
+                                  {selectedTournament.activeRoundId === round.id
+                                    ? 'Mostrando en QR'
+                                    : 'Mostrar en QR'}
+                                </button>
                                 <button
                                   className="rounded-md border border-amber-300/40 px-3 py-2 text-sm font-medium text-amber-200 transition hover:bg-amber-300/10"
                                   onClick={() =>
@@ -3100,7 +3154,7 @@ function TournamentWorkspace({
   )
 }
 
-function App() {
+function AuthenticatedApp() {
   const [authState, setAuthState] = useState<AuthState>(() => {
     try {
       return {
@@ -3245,6 +3299,28 @@ function App() {
   return (
     <AuthScreen client={authState.client} initialError={authState.error} />
   )
+}
+
+function App() {
+  const publicToken = new URLSearchParams(window.location.search).get('public')
+  if (publicToken !== null) {
+    return (
+      <Suspense
+        fallback={
+          <main
+            aria-live="polite"
+            className="app-shell flex min-h-screen items-center justify-center px-4"
+            role="status"
+          >
+            <p className="text-slate-200">Cargando tablero público…</p>
+          </main>
+        }
+      >
+        <PublicTournamentScreen token={publicToken} />
+      </Suspense>
+    )
+  }
+  return <AuthenticatedApp />
 }
 
 export default App
