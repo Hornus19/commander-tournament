@@ -8,8 +8,26 @@ export type PublicTournamentSnapshot =
       status: 'active'
       tournamentName: string
       roundNumber: number
-      tables: { tableNumber: number; players: string[] }[]
+      tables: {
+        roundId: string
+        podId: string
+        tableNumber: number
+        players: { id: string; name: string }[]
+        proposalStatus: 'pending' | 'approved' | 'rejected' | null
+        hasOfficialResult: boolean
+      }[]
     }
+
+export type ResultProposal = {
+  id: string
+  roundId: string
+  podId: string
+  roundNumber: number
+  tableNumber: number
+  reporterPlayerId: string
+  placements: string[][]
+  submittedAt: string
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -19,9 +37,20 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string')
 }
 
+function isProposalStatus(
+  value: unknown,
+): value is 'pending' | 'approved' | 'rejected' | null {
+  return (
+    value === null ||
+    value === 'pending' ||
+    value === 'approved' ||
+    value === 'rejected'
+  )
+}
+
 function getPublicLinkManagementError(error: unknown, fallback: string) {
   if (isRecord(error) && 'code' in error && error.code === '42501') {
-    return 'Solo el propietario o un administrador verificado puede gestionar el enlace público. Sincroniza primero el torneo si aún no existe en Supabase.'
+    return 'Solo el propietario del torneo o un administrador verificado puede realizar esta acción.'
   }
   return fallback
 }
@@ -61,17 +90,37 @@ function parsePublicTournamentSnapshot(
   const tables = value.tables.map((table) => {
     if (
       !isRecord(table) ||
+      typeof table.round_id !== 'string' ||
+      typeof table.pod_id !== 'string' ||
       typeof table.table_number !== 'number' ||
       !Number.isInteger(table.table_number) ||
-      !isStringArray(table.players)
+      !Array.isArray(table.players) ||
+      !isProposalStatus(table.proposal_status) ||
+      typeof table.has_official_result !== 'boolean'
     ) {
       throw new Error(
         'Supabase devolvió una vista pública con formato no válido.',
       )
     }
+    const players = table.players.map((player) => {
+      if (
+        !isRecord(player) ||
+        typeof player.player_id !== 'string' ||
+        typeof player.name !== 'string'
+      ) {
+        throw new Error(
+          'Supabase devolvió una vista pública con formato no válido.',
+        )
+      }
+      return { id: player.player_id, name: player.name }
+    })
     return {
+      roundId: table.round_id,
+      podId: table.pod_id,
       tableNumber: table.table_number,
-      players: table.players,
+      players,
+      proposalStatus: table.proposal_status,
+      hasOfficialResult: table.has_official_result,
     }
   })
 
@@ -169,4 +218,136 @@ export async function fetchPublicTournament(
     })
   }
   return parsePublicTournamentSnapshot(data)
+}
+
+export async function submitPublicTournamentResult(
+  token: string,
+  roundId: string,
+  podId: string,
+  tableNumber: number,
+  reporterPlayerId: string,
+  placements: string[][],
+): Promise<void> {
+  const { data, error } = await getSupabaseClient().rpc(
+    'submit_public_tournament_result',
+    {
+      p_token: token,
+      p_round_id: roundId,
+      p_pod_id: podId,
+      p_table_number: tableNumber,
+      p_reporter_player_id: reporterPlayerId,
+      p_placements: placements,
+    },
+  )
+
+  if (error) {
+    throw new Error(
+      error.code === 'P0001'
+        ? error.message
+        : 'No se pudo enviar el resultado. Comprueba los datos e inténtalo de nuevo.',
+      { cause: error },
+    )
+  }
+  if (!isRecord(data) || data.status !== 'pending') {
+    throw new Error('Supabase no confirmó el envío de la propuesta.')
+  }
+}
+
+export async function fetchTournamentResultProposals(
+  tournamentId: string,
+): Promise<ResultProposal[]> {
+  const { data, error } = await getSupabaseClient().rpc(
+    'get_tournament_result_proposals',
+    { p_tournament_id: tournamentId },
+  )
+
+  if (error) {
+    throw new Error(
+      getPublicLinkManagementError(
+        error,
+        'No se pudieron cargar las propuestas de resultado.',
+      ),
+      { cause: error },
+    )
+  }
+  if (!Array.isArray(data)) {
+    throw new Error(
+      'Supabase devolvió una lista de propuestas con formato no válido.',
+    )
+  }
+
+  return data.map((proposal) => {
+    if (
+      !isRecord(proposal) ||
+      typeof proposal.id !== 'string' ||
+      typeof proposal.round_id !== 'string' ||
+      typeof proposal.pod_id !== 'string' ||
+      typeof proposal.round_number !== 'number' ||
+      !Number.isInteger(proposal.round_number) ||
+      typeof proposal.table_number !== 'number' ||
+      !Number.isInteger(proposal.table_number) ||
+      typeof proposal.reporter_player_id !== 'string' ||
+      typeof proposal.submitted_at !== 'string' ||
+      !Number.isFinite(Date.parse(proposal.submitted_at)) ||
+      !Array.isArray(proposal.placements) ||
+      !proposal.placements.every(isStringArray)
+    ) {
+      throw new Error(
+        'Supabase devolvió una propuesta de resultado con formato no válido.',
+      )
+    }
+
+    return {
+      id: proposal.id,
+      roundId: proposal.round_id,
+      podId: proposal.pod_id,
+      roundNumber: proposal.round_number,
+      tableNumber: proposal.table_number,
+      reporterPlayerId: proposal.reporter_player_id,
+      placements: proposal.placements,
+      submittedAt: proposal.submitted_at,
+    }
+  })
+}
+
+export async function approveTournamentResultProposal(
+  proposalId: string,
+): Promise<void> {
+  const { error } = await getSupabaseClient().rpc(
+    'approve_tournament_result_proposal',
+    { p_proposal_id: proposalId },
+  )
+
+  if (error) {
+    throw new Error(
+      error.code === 'P0001'
+        ? error.message
+        : getPublicLinkManagementError(
+            error,
+            'No se pudo aprobar la propuesta de resultado.',
+          ),
+      { cause: error },
+    )
+  }
+}
+
+export async function rejectTournamentResultProposal(
+  proposalId: string,
+): Promise<void> {
+  const { error } = await getSupabaseClient().rpc(
+    'reject_tournament_result_proposal',
+    { p_proposal_id: proposalId },
+  )
+
+  if (error) {
+    throw new Error(
+      error.code === 'P0001'
+        ? error.message
+        : getPublicLinkManagementError(
+            error,
+            'No se pudo rechazar la propuesta de resultado.',
+          ),
+      { cause: error },
+    )
+  }
 }

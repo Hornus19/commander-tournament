@@ -7,6 +7,7 @@ import {
   type FormEvent,
 } from 'react'
 import type { Session, SupabaseClient } from '@supabase/supabase-js'
+import type { ResultProposal } from './lib/publicTournamentRepository'
 import {
   migrateLegacyTournaments,
   readTournamentsForSync,
@@ -27,6 +28,7 @@ import {
   updateAutomaticSyncPreference,
   type TournamentRecord,
 } from './lib/tournamentRepository'
+import { buildPlacementsFromRanks } from './lib/podPlacements'
 import './App.css'
 
 const PublicTournamentManager = lazy(
@@ -34,6 +36,9 @@ const PublicTournamentManager = lazy(
 )
 const PublicTournamentScreen = lazy(
   () => import('./components/PublicTournamentScreen'),
+)
+const TournamentResultProposals = lazy(
+  () => import('./components/TournamentResultProposals'),
 )
 
 type TournamentConflict = {
@@ -1692,58 +1697,17 @@ function TournamentWorkspace({
     if (pod.playerIds.length !== 3 && pod.playerIds.length !== 4) {
       setPodResultErrors((current) => ({
         ...current,
-        [pod.id]: 'Solo se pueden registrar resultados para pods de 3 o 4 jugadores.',
-      }))
-      return
-    }
-
-    const hasEveryPlayerExactlyOnce =
-      new Set(pod.playerIds).size === pod.playerIds.length &&
-      pod.playerIds.every(
-        (playerId) =>
-          typeof draft[playerId] === 'string' &&
-          draft[playerId] !== '' &&
-          Number.isInteger(Number(draft[playerId])) &&
-          Number(draft[playerId]) >= 1 &&
-          Number(draft[playerId]) <= pod.playerIds.length,
-      )
-
-    if (!hasEveryPlayerExactlyOnce) {
-      setPodResultErrors((current) => ({
-        ...current,
-        [pod.id]: 'Asigna un puesto a cada jugador antes de guardar.',
-      }))
-      return
-    }
-
-    const playersByPlace = new Map<number, string[]>()
-    pod.playerIds.forEach((playerId) => {
-      const place = Number(draft[playerId])
-      playersByPlace.set(place, [
-        ...(playersByPlace.get(place) ?? []),
-        playerId,
-      ])
-    })
-    const placements = [...playersByPlace.entries()]
-      .sort(([firstPlace], [secondPlace]) => firstPlace - secondPlace)
-      .map(([, playerIds]) => playerIds)
-
-    let expectedPlace = 1
-    const validPlacements = [...playersByPlace.keys()]
-      .sort((first, second) => first - second)
-      .every((place) => {
-        if (place !== expectedPlace) {
-          return false
-        }
-        expectedPlace += (playersByPlace.get(place) ?? []).length
-        return true
-      })
-
-    if (!validPlacements || expectedPlace !== pod.playerIds.length + 1) {
-      setPodResultErrors((current) => ({
-        ...current,
         [pod.id]:
-          'Revisa los puestos: tras un empate, el siguiente puesto avanza según las personas empatadas.',
+          'Solo se pueden registrar resultados para pods de 3 o 4 jugadores.',
+      }))
+      return
+    }
+
+    const placementResult = buildPlacementsFromRanks(pod.playerIds, draft)
+    if (!placementResult.valid) {
+      setPodResultErrors((current) => ({
+        ...current,
+        [pod.id]: placementResult.error,
       }))
       return
     }
@@ -1756,7 +1720,10 @@ function TournamentWorkspace({
               ...round,
               pods: round.pods.map((currentPod) =>
                 currentPod.id === pod.id
-                  ? { ...currentPod, result: { placements } }
+                  ? {
+                      ...currentPod,
+                      result: { placements: placementResult.placements },
+                    }
                   : currentPod,
               ),
             }
@@ -1784,6 +1751,38 @@ function TournamentWorkspace({
       selectedTournament?.players.filter(
         (player) => !assignedPlayerIds.has(player.id),
       ) ?? []
+    )
+  }
+
+  function applyApprovedProposal(proposal: ResultProposal) {
+    if (!selectedTournament) {
+      return
+    }
+
+    const tournamentId = selectedTournament.id
+    setTournaments((current) =>
+      current.map((tournament) =>
+        tournament.id !== tournamentId
+          ? tournament
+          : {
+              ...tournament,
+              rounds: tournament.rounds.map((round) =>
+                round.id !== proposal.roundId
+                  ? round
+                  : {
+                      ...round,
+                      pods: round.pods.map((pod) =>
+                        pod.id !== proposal.podId
+                          ? pod
+                          : {
+                              ...pod,
+                              result: { placements: proposal.placements },
+                            },
+                      ),
+                    },
+              ),
+            },
+      ),
     )
   }
 
@@ -3061,6 +3060,25 @@ function TournamentWorkspace({
                     </div>
                   )}
                 </section>
+
+                <Suspense
+                 fallback={
+                   <p
+                     aria-live="polite"
+                     className="mt-8 text-sm text-slate-300"
+                     role="status"
+                   >
+                     Cargando propuestas de resultado…
+                   </p>
+                 }
+                >
+                 <TournamentResultProposals
+                   key={selectedTournament.id}
+                   onApproved={applyApprovedProposal}
+                   saving={adminSaving}
+                   tournament={selectedTournament}
+                 />
+                </Suspense>
 
                 <section
                   aria-labelledby="standings-heading"
