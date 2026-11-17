@@ -2404,7 +2404,7 @@ function TournamentWorkspace({
                     {
                       value: 'two-headed-giant' as const,
                       title: 'Dos Cabezas',
-                      details: 'Parejas: victoria 4 · empate 2 · derrota 0',
+                      details: 'Parejas',
                     },
                   ].map((option) => (
                     <label
