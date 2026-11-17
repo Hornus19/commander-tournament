@@ -930,29 +930,6 @@ function TournamentWorkspace({
   }, [adminMode, userId])
 
   useEffect(() => {
-    if (adminMode || !autoSyncEnabled) {
-      return
-    }
-
-    autoSyncEnabledRef.current = true
-    if (autoSyncBootstrappedRef.current) {
-      return
-    }
-    autoSyncBootstrappedRef.current = true
-    if (!navigator.onLine) {
-      autoSyncNeedsRetryRef.current = true
-      const timeoutId = window.setTimeout(() => {
-        setSyncStatus('pending')
-        setSyncError(
-          'Sin conexión. Los cambios se conservan localmente y se sincronizarán cuando vuelva la conexión.',
-        )
-      }, 0)
-      return () => window.clearTimeout(timeoutId)
-    }
-    void beginSyncRef.current(true)
-  }, [adminMode, autoSyncEnabled, userId])
-
-  useEffect(() => {
     const previousSnapshot = previousTournamentSnapshotRef.current
     previousTournamentSnapshotRef.current = localSnapshot
     if (previousSnapshot === localSnapshot) {
@@ -1269,6 +1246,29 @@ function TournamentWorkspace({
   useEffect(() => {
     beginSyncRef.current = beginSync
   })
+
+  useEffect(() => {
+    if (adminMode || !autoSyncEnabled) {
+      return
+    }
+
+    autoSyncEnabledRef.current = true
+    if (autoSyncBootstrappedRef.current) {
+      return
+    }
+    autoSyncBootstrappedRef.current = true
+    if (!navigator.onLine) {
+      autoSyncNeedsRetryRef.current = true
+      const timeoutId = window.setTimeout(() => {
+        setSyncStatus('pending')
+        setSyncError(
+          'Sin conexión. Los cambios se conservan localmente y se sincronizarán cuando vuelva la conexión.',
+        )
+      }, 0)
+      return () => window.clearTimeout(timeoutId)
+    }
+    void beginSyncRef.current(true)
+  }, [adminMode, autoSyncEnabled, userId])
 
   function cancelSyncReview() {
     if (syncInProgressRef.current) {
