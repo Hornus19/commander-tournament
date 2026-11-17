@@ -49,8 +49,13 @@
   color-scheme: dark;
 }
 
-.app-shell input:focus-visible,
-.app-shell button:focus-visible {
+.app-shell :where(a, button, input, select, textarea):focus-visible {
   outline: 2px solid #fcd34d;
   outline-offset: 3px;
+  box-shadow: 0 0 0 4px rgb(11 23 48 / 80%);
+}
+
+.app-shell button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }

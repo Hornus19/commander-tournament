@@ -1,8 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
-  <rect width="192" height="192" rx="32" fill="#0b1730"/>
-  <g fill="none" stroke="#e7bd57" stroke-linecap="round" stroke-linejoin="round" stroke-width="10">
-    <path d="M48 52h34v44h40"/>
-    <path d="M48 140h34V96"/>
-  </g>
-  <circle cx="130" cy="96" r="7" fill="#e7bd57"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 160 160">
+  <title>Commander Tournament</title>
+  <rect width="160" height="160" rx="30" fill="#0b1730"/>
+  <path d="M80 18 142 80 80 142 18 80Z" fill="#14294b" stroke="#e7bd57" stroke-width="4"/>
+  <path d="M80 28 106 54 80 80 54 54Z" fill="#38bdf8" stroke="#0b1730" stroke-width="3"/>
+  <path d="M132 80 106 106 80 80 106 54Z" fill="#f2ae49" stroke="#0b1730" stroke-width="3"/>
+  <path d="M80 132 54 106 80 80 106 106Z" fill="#a78bfa" stroke="#0b1730" stroke-width="3"/>
+  <path d="M28 80 54 54 80 80 54 106Z" fill="#35c7a2" stroke="#0b1730" stroke-width="3"/>
+  <path d="m80 68 12 12-12 12-12-12Z" fill="#e7bd57"/>
+  <circle cx="80" cy="12" r="3" fill="#fb7185"/>
+  <circle cx="148" cy="80" r="3" fill="#35c7a2"/>
+  <circle cx="80" cy="148" r="3" fill="#38bdf8"/>
+  <circle cx="12" cy="80" r="3" fill="#a78bfa"/>
 </svg>

@@ -449,9 +449,17 @@ function AuthScreen({
         aria-labelledby="auth-heading"
         className="mx-auto w-full max-w-md rounded-2xl border border-white/10 bg-slate-900/90 p-6 shadow-xl shadow-black/20 sm:p-8"
       >
-        <p className="app-kicker text-sm font-semibold text-amber-300">
-          Commander Tournament
-        </p>
+        <div className="mb-5 flex items-center gap-3">
+          <img
+            alt=""
+            aria-hidden="true"
+            className="size-12 shrink-0 rounded-xl shadow-lg shadow-black/30"
+            src="/icons/commander-mark.svg"
+          />
+          <p className="app-kicker text-sm font-semibold text-amber-300">
+            Commander Tournament
+          </p>
+        </div>
         <h1 className="mb-2!" id="auth-heading">
           {mode === 'sign-in' ? 'Iniciar sesión' : 'Crear cuenta'}
         </h1>
@@ -637,6 +645,18 @@ function getPodScoreSpread(
     }
   }
   return spread
+}
+
+function shufflePlayerIds(playerIds: string[]) {
+  const shuffledPlayerIds = [...playerIds]
+  for (let index = shuffledPlayerIds.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1))
+    ;[shuffledPlayerIds[index], shuffledPlayerIds[randomIndex]] = [
+      shuffledPlayerIds[randomIndex],
+      shuffledPlayerIds[index],
+    ]
+  }
+  return shuffledPlayerIds
 }
 
 function generatePodGroups(
@@ -827,6 +847,7 @@ function TournamentWorkspace({
   const suppressAutoSyncSnapshotRef = useRef<string | null>(null)
   const persistedSnapshotRef = useRef<string | null>(null)
   const previousTournamentSnapshotRef = useRef(canonicalJson(tournaments))
+  const retrySyncAfterReviewRef = useRef<boolean | null>(null)
   const beginSyncRef = useRef<(automatic?: boolean) => Promise<void>>(
     async () => {},
   )
@@ -834,7 +855,6 @@ function TournamentWorkspace({
   const selectedTournament =
     tournaments.find(({ id }) => id === selectedTournamentId) ?? null
   const localSnapshot = canonicalJson(tournaments)
-  const syncPlan = syncReview ? combineTournaments(syncReview) : null
   const displayedSyncStatus =
     syncStatus === 'synced' && lastSyncedSnapshot !== localSnapshot
       ? 'pending'
@@ -870,10 +890,6 @@ function TournamentWorkspace({
               : index + 1,
         }))
     : []
-
-  useEffect(() => {
-    beginSyncRef.current = beginSync
-  })
 
   useEffect(() => {
     if (!adminMode) {
@@ -1055,16 +1071,24 @@ function TournamentWorkspace({
   }, [adminMode, autoSyncEnabled, syncReview, syncStatus])
 
   function chooseConflict(id: string, choice: 'local' | 'remote') {
-    setSyncReview((current) =>
-      current
-        ? {
-            ...current,
-            conflicts: current.conflicts.map((conflict) =>
-              conflict.id === id ? { ...conflict, choice } : conflict,
-            ),
-          }
-        : current,
-    )
+    if (!syncReview || syncInProgressRef.current) {
+      return
+    }
+
+    const updatedReview = {
+      ...syncReview,
+      conflicts: syncReview.conflicts.map((conflict) =>
+        conflict.id === id ? { ...conflict, choice } : conflict,
+      ),
+    }
+    if (updatedReview.conflicts.some((conflict) => conflict.choice === null)) {
+      setSyncReview(updatedReview)
+      return
+    }
+
+    syncInProgressRef.current = true
+    setSyncReview(null)
+    void commitSync(updatedReview, updatedReview.automatic)
   }
 
   async function commitSync(review: SyncReview, automatic: boolean) {
@@ -1088,13 +1112,25 @@ function TournamentWorkspace({
 
       const latestRemote = await fetchTournaments(userId)
       if (!sameRemoteRecords(latestRemote, review.remoteRecords)) {
-        setSyncReview(
-          createSyncReview(latestLocal, latestRemote, review.automatic),
+        const refreshedReview = createSyncReview(
+          latestLocal,
+          latestRemote,
+          automatic,
         )
-        setSyncStatus('pending')
-        setSyncError(
-          'Los torneos de Supabase cambiaron durante la revisión. Revisa de nuevo los conflictos y confirma.',
-        )
+        if (refreshedReview.conflicts.length > 0) {
+          setSyncReview(refreshedReview)
+          setSyncStatus('pending')
+          setSyncError(
+            'Supabase cambió durante la revisión. Elige de nuevo qué versión conservar; no se han sobrescrito datos.',
+          )
+        } else {
+          setSyncReview(null)
+          setSyncStatus('pending')
+          setSyncError(
+            'Supabase cambió durante la revisión. Se comprobará la versión actualizada antes de sincronizar.',
+          )
+          retrySyncAfterReviewRef.current = automatic
+        }
         return
       }
 
@@ -1172,6 +1208,14 @@ function TournamentWorkspace({
       }
     } finally {
       syncInProgressRef.current = false
+      const retryAutomatically = retrySyncAfterReviewRef.current
+      retrySyncAfterReviewRef.current = null
+      if (retryAutomatically !== null) {
+        window.setTimeout(
+          () => void beginSyncRef.current(retryAutomatically),
+          0,
+        )
+      }
     }
   }
 
@@ -1203,14 +1247,15 @@ function TournamentWorkspace({
         remoteRecords,
         automatic,
       )
-      setSyncReview(review)
-      if (review.conflicts.length > 0 || !automatic) {
+      if (review.conflicts.length > 0) {
+        setSyncReview(review)
         setSyncStatus('pending')
         syncInProgressRef.current = false
         return
       }
 
-      await commitSync(review, true)
+      setSyncReview(null)
+      await commitSync(review, automatic)
     } catch (error) {
       setSyncError(getSyncErrorMessage(error))
       setSyncStatus(automatic ? 'pending' : 'error')
@@ -1221,15 +1266,14 @@ function TournamentWorkspace({
     }
   }
 
-  async function confirmSync() {
-    if (!syncReview || syncInProgressRef.current) {
-      return
-    }
-    syncInProgressRef.current = true
-    await commitSync(syncReview, false)
-  }
+  useEffect(() => {
+    beginSyncRef.current = beginSync
+  })
 
   function cancelSyncReview() {
+    if (syncInProgressRef.current) {
+      return
+    }
     setSyncReview(null)
     setSyncError('')
     setSyncStatus(
@@ -1468,16 +1512,95 @@ function TournamentWorkspace({
     }))
   }
 
-  function createRound() {
+  function getPreviousRoundCompletionError(
+    tournament: Tournament,
+    targetRoundIndex: number,
+  ): string | null {
+    const tournamentPlayerIds = new Set(
+      tournament.players.map((player) => player.id),
+    )
+
+    for (let roundIndex = 0; roundIndex < targetRoundIndex; roundIndex += 1) {
+      const round = tournament.rounds[roundIndex]
+      const roundNumber = roundIndex + 1
+      if (round.pods.length === 0) {
+        return `No se puede avanzar: la ronda ${roundNumber} no tiene mesas. Completa sus mesas y resultados antes de continuar.`
+      }
+
+      const assignedPlayerIds = new Set<string>()
+      for (let podIndex = 0; podIndex < round.pods.length; podIndex += 1) {
+        const pod = round.pods[podIndex]
+        const tableNumber = podIndex + 1
+        if (pod.playerIds.length !== 3 && pod.playerIds.length !== 4) {
+          return `No se puede avanzar: ronda ${roundNumber}, mesa ${tableNumber} tiene ${pod.playerIds.length} jugadores; debe tener 3 o 4.`
+        }
+        if (new Set(pod.playerIds).size !== pod.playerIds.length) {
+          return `No se puede avanzar: ronda ${roundNumber}, mesa ${tableNumber} tiene jugadores duplicados.`
+        }
+
+        for (const playerId of pod.playerIds) {
+          if (!tournamentPlayerIds.has(playerId)) {
+            return `No se puede avanzar: ronda ${roundNumber}, mesa ${tableNumber} incluye un jugador que ya no está en el torneo.`
+          }
+          if (assignedPlayerIds.has(playerId)) {
+            const playerName =
+              tournament.players.find((player) => player.id === playerId)
+                ?.name ?? playerId
+            return `No se puede avanzar: ronda ${roundNumber}, mesa ${tableNumber} vuelve a asignar a ${playerName}, que ya está en otra mesa.`
+          }
+          assignedPlayerIds.add(playerId)
+        }
+      }
+
+      const unassignedPlayers = tournament.players.filter(
+        (player) => !assignedPlayerIds.has(player.id),
+      )
+      if (unassignedPlayers.length > 0) {
+        return `No se puede avanzar: en la ronda ${roundNumber} faltan jugadores por asignar: ${unassignedPlayers.map((player) => player.name).join(', ')}.`
+      }
+
+      for (let podIndex = 0; podIndex < round.pods.length; podIndex += 1) {
+        const pod = round.pods[podIndex]
+        if (!pod.result) {
+          return `No se puede avanzar: ronda ${roundNumber}, mesa ${podIndex + 1} aún no tiene un resultado oficial aprobado.`
+        }
+
+        const resultPlayerIds = pod.result.placements.flat()
+        if (
+          resultPlayerIds.length !== pod.playerIds.length ||
+          new Set(resultPlayerIds).size !== resultPlayerIds.length ||
+          resultPlayerIds.some((playerId) => !pod.playerIds.includes(playerId))
+        ) {
+          return `No se puede avanzar: ronda ${roundNumber}, mesa ${podIndex + 1} tiene un resultado oficial incompleto. Corrígelo antes de continuar.`
+        }
+      }
+    }
+
+    return null
+  }
+
+  async function createRound() {
+    if (!selectedTournament) {
+      return
+    }
+    const previousRoundError = getPreviousRoundCompletionError(
+      selectedTournament,
+      selectedTournament.rounds.length,
+    )
+    if (previousRoundError) {
+      setRoundGenerationError(previousRoundError)
+      return
+    }
+
     const roundId = crypto.randomUUID()
-    updateSelectedTournament((tournament) => ({
+    const saved = await updateSelectedTournament((tournament) => ({
       ...tournament,
       activeRoundId: roundId,
-      rounds: [
-        ...tournament.rounds,
-        { id: roundId, pods: [] },
-      ],
+      rounds: [...tournament.rounds, { id: roundId, pods: [] }],
     }))
+    if (saved) {
+      setRoundGenerationError('')
+    }
   }
 
   async function generateRoundAutomatically(roundId: string | null) {
@@ -1494,6 +1617,15 @@ function TournamentWorkspace({
         ? undefined
         : selectedTournament.rounds.find((round) => round.id === roundId)
     if (roundIndex < 0 || (roundId !== null && !existingRound)) {
+      return
+    }
+
+    const previousRoundError = getPreviousRoundCompletionError(
+      selectedTournament,
+      roundIndex,
+    )
+    if (previousRoundError) {
+      setRoundGenerationError(previousRoundError)
       return
     }
 
@@ -1539,18 +1671,11 @@ function TournamentWorkspace({
     })
 
     const playerIds = selectedTournament.players.map(({ id }) => id)
-    if (roundIndex === 0) {
-      for (let index = playerIds.length - 1; index > 0; index -= 1) {
-        const randomIndex = Math.floor(Math.random() * (index + 1))
-        ;[playerIds[index], playerIds[randomIndex]] = [
-          playerIds[randomIndex],
-          playerIds[index],
-        ]
-      }
-    }
+    const orderedPlayerIds =
+      roundIndex === 0 ? shufflePlayerIds(playerIds) : playerIds
 
     const groups = generatePodGroups(
-      playerIds,
+      orderedPlayerIds,
       podSizes,
       pointsByPlayerId,
       getPreviousPartners(previousRounds),
@@ -1808,25 +1933,12 @@ function TournamentWorkspace({
     <main className="app-shell min-h-screen px-4 py-8 sm:px-8 sm:py-12">
       <div className="mx-auto w-full max-w-6xl">
         <header className="mb-8 flex items-center gap-4 sm:mb-12">
-          <div
+          <img
+            alt=""
             aria-hidden="true"
-            className="flex size-14 shrink-0 items-center justify-center rounded-2xl border border-amber-300/30 bg-slate-900 sm:size-16"
-          >
-            <svg
-              className="size-8 text-amber-300 sm:size-9"
-              fill="none"
-              viewBox="0 0 32 32"
-            >
-              <path
-                d="M7 6h7v10h10M7 26h7V16"
-                stroke="currentColor"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth="2.5"
-              />
-              <circle cx="25" cy="16" r="2" fill="currentColor" />
-            </svg>
-          </div>
+            className="size-14 shrink-0 rounded-2xl shadow-lg shadow-black/30 sm:size-16"
+            src="/icons/commander-mark.svg"
+          />
           <div className="min-w-0 flex-1">
             <p className="app-kicker text-xs font-semibold tracking-[0.2em] text-amber-300 uppercase">
               Tu mesa, tu torneo
@@ -1887,12 +1999,14 @@ function TournamentWorkspace({
               <h2 id="sync-heading">Sincronización</h2>
               <p
                 aria-live="polite"
-                className={`app-supporting-copy text-sm ${
+                className={`app-supporting-copy inline-flex rounded-full border px-3 py-1 text-sm font-medium ${
                   displayedSyncStatus === 'error'
-                    ? 'text-rose-300'
+                    ? 'border-rose-400/40 bg-rose-400/10 text-rose-200'
                     : displayedSyncStatus === 'synced'
-                      ? 'text-emerald-300'
-                      : 'text-slate-300'
+                      ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200'
+                      : displayedSyncStatus === 'syncing'
+                        ? 'border-sky-400/40 bg-sky-400/10 text-sky-200'
+                        : 'border-amber-300/30 bg-amber-300/10 text-amber-100'
                 }`}
                 role="status"
               >
@@ -1951,127 +2065,92 @@ function TournamentWorkspace({
             </p>
           )}
 
-          {syncReview && (
+          {syncReview && syncReview.conflicts.length > 0 && (
             <div className="mt-5 space-y-4 border-t border-white/10 pt-5">
-              {syncReview.conflicts.length > 0 && (
-                <div>
-                  <h3 className="text-base font-semibold text-slate-100">
-                    Resuelve los conflictos
-                  </h3>
-                  <p className="app-supporting-copy text-sm text-slate-400">
-                    {syncReview.automatic
-                      ? 'La sincronización automática está pausada. Elige qué versión conservar para cada torneo con cambios distintos; no se sobrescribirá ninguna hasta resolverlos todos y confirmar.'
-                      : 'Elige qué versión conservar para cada torneo con cambios distintos. No se sobrescribirá ninguna hasta resolverlos todos y confirmar.'}
-                  </p>
-                  <div className="mt-4 space-y-3">
-                    {syncReview.conflicts.map((conflict, index) => (
-                      <fieldset
-                        className="rounded-xl border border-amber-300/20 bg-slate-950/40 p-4"
-                        key={conflict.id}
-                      >
-                        <legend className="px-1 text-sm font-semibold text-amber-100">
-                          Conflicto {index + 1}: {conflict.local.name}
-                        </legend>
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          {(
+              <div>
+                <h3 className="text-base font-semibold text-slate-100">
+                  Resuelve los conflictos
+                </h3>
+                <p className="app-supporting-copy text-sm text-slate-300">
+                  {syncReview.automatic
+                    ? 'La sincronización automática está pausada. Elige qué versión conservar para cada torneo; la sincronización continuará al resolverlos todos.'
+                    : 'Elige qué versión conservar para cada torneo. La sincronización comenzará al resolverlos todos.'}
+                  {' '}No se sobrescribirá ninguna versión antes de terminar
+                  esta revisión.
+                </p>
+                <div className="mt-4 space-y-3">
+                  {syncReview.conflicts.map((conflict, index) => (
+                    <fieldset
+                      className="rounded-xl border border-amber-300/25 bg-slate-950/60 p-4 shadow-sm shadow-black/20"
+                      key={conflict.id}
+                    >
+                      <legend className="px-1 text-sm font-semibold text-amber-100">
+                        Conflicto {index + 1}: {conflict.local.name}
+                      </legend>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {(
+                          [
+                            ['local', 'Usar versión local', conflict.local],
                             [
-                              ['local', 'Usar versión local', conflict.local],
-                              [
-                                'remote',
-                                'Usar versión de Supabase',
-                                conflict.remote,
-                              ],
-                            ] as const
-                          ).map(([choice, label, tournament]) => (
-                            <label
-                              className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm ${
-                                conflict.choice === choice
-                                  ? 'border-amber-300/60 bg-amber-300/10 text-amber-100'
-                                  : 'border-slate-700 text-slate-300'
-                              }`}
-                              key={choice}
-                            >
-                              <input
-                                checked={conflict.choice === choice}
-                                className="mt-0.5 accent-amber-300"
-                                name={`conflict-${conflict.id}`}
-                                onChange={() =>
-                                  chooseConflict(conflict.id, choice)
-                                }
-                                type="radio"
-                              />
-                              <span className="min-w-0">
-                                <span className="block font-medium">
-                                  {label}
-                                </span>
-                                <span className="mt-1 block text-xs text-slate-400">
-                                  {tournament.players.length}{' '}
-                                  {tournament.players.length === 1
-                                    ? 'participante'
-                                    : 'participantes'}
-                                  {' · '}
-                                  {tournament.rounds.length}{' '}
-                                  {tournament.rounds.length === 1
-                                    ? 'ronda'
-                                    : 'rondas'}
-                                </span>
+                              'remote',
+                              'Usar versión de Supabase',
+                              conflict.remote,
+                            ],
+                          ] as const
+                        ).map(([choice, label, tournament]) => (
+                          <label
+                            className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm transition-colors ${
+                              conflict.choice === choice
+                                ? 'border-amber-300/60 bg-amber-300/10 text-amber-100'
+                                : 'border-slate-700 text-slate-300 hover:border-slate-500'
+                            }`}
+                            key={choice}
+                          >
+                            <input
+                              checked={conflict.choice === choice}
+                              className="mt-0.5 accent-amber-300"
+                              name={`conflict-${conflict.id}`}
+                              onChange={() =>
+                                chooseConflict(conflict.id, choice)
+                              }
+                              type="radio"
+                            />
+                            <span className="min-w-0">
+                              <span className="block font-medium">
+                                {label}
                               </span>
-                            </label>
-                          ))}
-                        </div>
-                      </fieldset>
-                    ))}
-                  </div>
+                              <span className="mt-1 block text-xs text-slate-300">
+                                {tournament.players.length}{' '}
+                                {tournament.players.length === 1
+                                  ? 'participante'
+                                  : 'participantes'}
+                                {' · '}
+                                {tournament.rounds.length}{' '}
+                                {tournament.rounds.length === 1
+                                  ? 'ronda'
+                                  : 'rondas'}
+                              </span>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
+                  ))}
                 </div>
-              )}
-
-              {syncPlan ? (
-                <div className="rounded-lg border border-slate-700 bg-slate-950/50 p-4">
-                  <p className="text-sm text-slate-200">
-                    Se enviarán{' '}
-                    <strong className="text-amber-200">
-                      {syncPlan.length}{' '}
-                      {syncPlan.length === 1
-                        ? 'torneo'
-                        : 'torneos'}
-                    </strong>{' '}
-                    a Supabase. Se incluirá la lista combinada completa de esta
-                    cuenta.
-                  </p>
-                  <div className="mt-4 flex flex-wrap gap-3">
-                    <button
-                      className="rounded-lg bg-amber-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-amber-200 disabled:cursor-wait disabled:opacity-50"
-                      disabled={syncStatus === 'syncing'}
-                      onClick={() => void confirmSync()}
-                      type="button"
-                    >
-                      Confirmar y sincronizar
-                    </button>
-                    <button
-                      className="rounded-lg px-4 py-2.5 text-sm text-slate-300 hover:bg-white/10"
-                      disabled={syncStatus === 'syncing'}
-                      onClick={cancelSyncReview}
-                      type="button"
-                    >
-                      Cancelar
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-wrap gap-3">
-                  <button
-                    className="rounded-lg border border-slate-600 px-4 py-2.5 text-sm text-slate-300 hover:bg-white/10"
-                    disabled={syncStatus === 'syncing'}
-                    onClick={cancelSyncReview}
-                    type="button"
-                  >
-                    Cancelar
-                  </button>
-                  <p className="self-center text-sm text-slate-400">
-                    Elige una versión para cada conflicto para continuar.
-                  </p>
-                </div>
-              )}
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-950/50 p-4">
+                <p className="text-sm text-slate-300">
+                  Al elegir una versión para cada conflicto, empezará la
+                  sincronización.
+                </p>
+                <button
+                  className="rounded-lg border border-slate-600 px-4 py-2.5 text-sm font-medium text-slate-200 transition hover:bg-white/10 disabled:cursor-wait disabled:opacity-50"
+                  onClick={cancelSyncReview}
+                  type="button"
+                >
+                  Cancelar revisión
+                </button>
+              </div>
             </div>
           )}
         </section>}

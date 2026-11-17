@@ -17,8 +17,8 @@ export default defineConfig({
         display: 'standalone',
         start_url: '/',
         scope: '/',
-        theme_color: '#863bff',
-        background_color: '#ffffff',
+        theme_color: '#0b1730',
+        background_color: '#0b1730',
         icons: [
           {
             src: '/icons/commander-192.svg',

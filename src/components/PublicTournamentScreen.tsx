@@ -139,9 +139,17 @@ export default function PublicTournamentScreen({ token }: { token: string }) {
         aria-labelledby="public-tournament-heading"
         className="mx-auto w-full max-w-4xl rounded-2xl border border-white/10 bg-slate-900/90 p-5 shadow-xl shadow-black/20 sm:p-8"
       >
-        <p className="app-kicker text-sm font-semibold text-amber-300">
-          Commander Tournament
-        </p>
+        <div className="flex items-center gap-3">
+          <img
+            alt=""
+            aria-hidden="true"
+            className="size-10 shrink-0 rounded-xl shadow-md shadow-black/30"
+            src="/icons/commander-mark.svg"
+          />
+          <p className="app-kicker text-sm font-semibold text-amber-300">
+            Commander Tournament
+          </p>
+        </div>
         {error && (
           <p
             className="mt-4 rounded-lg border border-rose-400/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-200"
