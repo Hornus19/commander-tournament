@@ -3,6 +3,8 @@ export type Player = {
   name: string
 }
 
+export type TournamentFormat = 'commander' | 'two-headed-giant'
+
 export type PodResult = {
   placements: string[][]
 }
@@ -21,6 +23,7 @@ export type TournamentRound = {
 export type Tournament = {
   id: string
   name: string
+  format: TournamentFormat
   date: string
   location: string
   players: Player[]
@@ -30,8 +33,9 @@ export type Tournament = {
 
 const LEGACY_STORAGE_KEY = 'commander-tournament:tournaments'
 const USER_STORAGE_KEY_PREFIX = `${LEGACY_STORAGE_KEY}:`
-type StoredTournament = Omit<Tournament, 'rounds'> & {
+type StoredTournament = Omit<Tournament, 'rounds' | 'format'> & {
   rounds?: TournamentRound[]
+  format?: TournamentFormat
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -46,25 +50,29 @@ function isPlayer(value: unknown): value is Player {
   )
 }
 
-function isPod(value: unknown): value is Pod {
+function isPod(value: unknown, format: TournamentFormat): value is Pod {
   return (
     isRecord(value) &&
     typeof value.id === 'string' &&
     Array.isArray(value.playerIds) &&
     value.playerIds.length <= 4 &&
     value.playerIds.every((playerId) => typeof playerId === 'string') &&
-    (value.result === undefined || isPodResult(value.result, value.playerIds))
+    (value.result === undefined ||
+      isPodResult(value.result, value.playerIds, format))
   )
 }
 
 function isPodResult(
   value: unknown,
   podPlayerIds: unknown[],
+  format: TournamentFormat,
 ): value is PodResult {
   if (
     !isRecord(value) ||
     !Array.isArray(value.placements) ||
-    (podPlayerIds.length !== 3 && podPlayerIds.length !== 4) ||
+    (format === 'two-headed-giant'
+      ? podPlayerIds.length !== 2
+      : podPlayerIds.length !== 3 && podPlayerIds.length !== 4) ||
     !value.placements.every(
       (placement) =>
         Array.isArray(placement) &&
@@ -76,19 +84,36 @@ function isPodResult(
   }
 
   const resultPlayerIds = value.placements.flat()
-  return (
+  const includesAllPlayers =
     resultPlayerIds.length === podPlayerIds.length &&
     new Set(resultPlayerIds).size === resultPlayerIds.length &&
     resultPlayerIds.every((playerId) => podPlayerIds.includes(playerId))
-  )
+
+  if (!includesAllPlayers) {
+    return false
+  }
+
+  if (format === 'two-headed-giant') {
+    return (
+      (value.placements.length === 1 &&
+        value.placements[0].length === 2) ||
+      (value.placements.length === 2 &&
+        value.placements.every((placement) => placement.length === 1))
+    )
+  }
+
+  return true
 }
 
-function isTournamentRound(value: unknown): value is TournamentRound {
+function isTournamentRound(
+  value: unknown,
+  format: TournamentFormat,
+): value is TournamentRound {
   return (
     isRecord(value) &&
     typeof value.id === 'string' &&
     Array.isArray(value.pods) &&
-    value.pods.every(isPod)
+    value.pods.every((pod) => isPod(pod, format))
   )
 }
 
@@ -97,6 +122,9 @@ function isTournament(value: unknown): value is StoredTournament {
     isRecord(value) &&
     typeof value.id === 'string' &&
     typeof value.name === 'string' &&
+    (value.format === undefined ||
+      value.format === 'commander' ||
+      value.format === 'two-headed-giant') &&
     typeof value.date === 'string' &&
     typeof value.location === 'string' &&
     Array.isArray(value.players) &&
@@ -104,15 +132,26 @@ function isTournament(value: unknown): value is StoredTournament {
     (value.activeRoundId === undefined ||
       typeof value.activeRoundId === 'string') &&
     (value.rounds === undefined ||
-      (Array.isArray(value.rounds) && value.rounds.every(isTournamentRound)))
+      (Array.isArray(value.rounds) &&
+        value.rounds.every((round) =>
+          isTournamentRound(
+            round,
+            value.format === 'two-headed-giant'
+              ? 'two-headed-giant'
+              : 'commander',
+          ),
+        )))
   )) {
     return false
   }
 
   const playerIds = new Set(value.players.map((player) => player.id))
+  const format = value.format ?? 'commander'
   return value.rounds === undefined || value.rounds.every((round) => {
     const assignedPlayerIds = round.pods.flatMap((pod) => pod.playerIds)
     return (
+      (format !== 'two-headed-giant' ||
+        round.pods.every((pod) => pod.playerIds.length <= 2)) &&
       assignedPlayerIds.every((playerId) => playerIds.has(playerId)) &&
       new Set(assignedPlayerIds).size === assignedPlayerIds.length
     )
@@ -131,6 +170,7 @@ function parseTournaments(storedValue: string): Tournament[] | null {
 function normalizeTournament(tournament: StoredTournament): Tournament {
   return {
     ...tournament,
+    format: tournament.format ?? 'commander',
     rounds: tournament.rounds ?? [],
   }
 }

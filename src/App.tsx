@@ -15,6 +15,7 @@ import {
   type Pod,
   type PodResult,
   type Tournament,
+  type TournamentFormat,
   type TournamentRound,
 } from './lib/tournamentStorage'
 import { getSupabaseClient } from './lib/supabase'
@@ -555,9 +556,23 @@ function AuthScreen({
   )
 }
 
-function getPodPoints(result: PodResult, playerCount: number) {
+function getPodPoints(
+  result: PodResult,
+  playerCount: number,
+  format: TournamentFormat,
+) {
   const pointsByPosition = playerCount === 4 ? [4, 3, 2, 0] : [4, 2, 0]
   const points = new Map<string, number>()
+
+  if (format === 'two-headed-giant') {
+    if (result.placements.length === 1) {
+      result.placements[0].forEach((teamId) => points.set(teamId, 2))
+      return points
+    }
+    result.placements[0]?.forEach((teamId) => points.set(teamId, 4))
+    result.placements[1]?.forEach((teamId) => points.set(teamId, 0))
+    return points
+  }
 
   if (result.placements.length === 1) {
     result.placements[0].forEach((playerId) => points.set(playerId, 1))
@@ -575,7 +590,17 @@ function getPodPoints(result: PodResult, playerCount: number) {
   return points
 }
 
-function getBalancedPodSizes(playerCount: number): number[] | null {
+function getBalancedPodSizes(
+  playerCount: number,
+  format: TournamentFormat,
+): number[] | null {
+  if (format === 'two-headed-giant') {
+    if (playerCount < 2 || playerCount % 2 !== 0) {
+      return null
+    }
+    return Array.from({ length: playerCount / 2 }, () => 2)
+  }
+
   const podCount = Math.ceil(playerCount / 4)
   if (podCount === 0) {
     return null
@@ -588,6 +613,16 @@ function getBalancedPodSizes(playerCount: number): number[] | null {
   )
 
   return sizes.every((size) => size === 3 || size === 4) ? sizes : null
+}
+
+function isSupportedPodSize(format: TournamentFormat, size: number) {
+  return format === 'two-headed-giant'
+    ? size === 2
+    : size === 3 || size === 4
+}
+
+function getPodCapacity(format: TournamentFormat) {
+  return format === 'two-headed-giant' ? 2 : 4
 }
 
 function getPairKey(firstPlayerId: string, secondPlayerId: string) {
@@ -794,6 +829,8 @@ function TournamentWorkspace({
     string | null
   >(() => tournaments[0]?.id ?? null)
   const [tournamentName, setTournamentName] = useState('')
+  const [tournamentFormat, setTournamentFormat] =
+    useState<TournamentFormat>('commander')
   const [tournamentDate, setTournamentDate] = useState('')
   const [tournamentLocation, setTournamentLocation] = useState('')
   const [tournamentError, setTournamentError] = useState('')
@@ -854,6 +891,10 @@ function TournamentWorkspace({
 
   const selectedTournament =
     tournaments.find(({ id }) => id === selectedTournamentId) ?? null
+  const participantLabel =
+    selectedTournament?.format === 'two-headed-giant' ? 'pareja' : 'jugador'
+  const participantsLabel =
+    selectedTournament?.format === 'two-headed-giant' ? 'parejas' : 'jugadores'
   const localSnapshot = canonicalJson(tournaments)
   const displayedSyncStatus =
     syncStatus === 'synced' && lastSyncedSnapshot !== localSnapshot
@@ -867,7 +908,11 @@ function TournamentWorkspace({
               total +
               round.pods.reduce((roundTotal, pod) => {
                 const podPoints = pod.result
-                  ? getPodPoints(pod.result, pod.playerIds.length)
+                  ? getPodPoints(
+                      pod.result,
+                      pod.playerIds.length,
+                      selectedTournament.format,
+                    )
                   : new Map<string, number>()
                 return roundTotal + (podPoints.get(player.id) ?? 0)
               }, 0),
@@ -1449,6 +1494,7 @@ function TournamentWorkspace({
     const tournament: Tournament = {
       id: crypto.randomUUID(),
       name,
+      format: tournamentFormat,
       date: tournamentDate,
       location: tournamentLocation.trim(),
       players: [],
@@ -1462,6 +1508,7 @@ function TournamentWorkspace({
     }
     setSelectedTournamentId(tournament.id)
     setTournamentName('')
+    setTournamentFormat('commander')
     setTournamentDate('')
     setTournamentLocation('')
     setTournamentError('')
@@ -1472,7 +1519,7 @@ function TournamentWorkspace({
     const name = playerName.trim()
 
     if (!selectedTournament || !name) {
-      setPlayerError('Escribe el nombre del jugador.')
+      setPlayerError(`Escribe el nombre de la ${participantLabel}.`)
       return
     }
 
@@ -1481,7 +1528,11 @@ function TournamentWorkspace({
     )
 
     if (alreadyAdded) {
-      setPlayerError('Ese jugador ya está en la lista.')
+      setPlayerError(
+        selectedTournament.format === 'two-headed-giant'
+          ? 'Esa pareja ya está en la lista.'
+          : 'Ese jugador ya está en la lista.',
+      )
       return
     }
 
@@ -1531,11 +1582,13 @@ function TournamentWorkspace({
       for (let podIndex = 0; podIndex < round.pods.length; podIndex += 1) {
         const pod = round.pods[podIndex]
         const tableNumber = podIndex + 1
-        if (pod.playerIds.length !== 3 && pod.playerIds.length !== 4) {
-          return `No se puede avanzar: ronda ${roundNumber}, mesa ${tableNumber} tiene ${pod.playerIds.length} jugadores; debe tener 3 o 4.`
+        if (!isSupportedPodSize(tournament.format, pod.playerIds.length)) {
+          return tournament.format === 'two-headed-giant'
+            ? `No se puede avanzar: ronda ${roundNumber}, mesa ${tableNumber} debe tener exactamente 2 parejas.`
+            : `No se puede avanzar: ronda ${roundNumber}, mesa ${tableNumber} tiene ${pod.playerIds.length} jugadores; debe tener 3 o 4.`
         }
         if (new Set(pod.playerIds).size !== pod.playerIds.length) {
-          return `No se puede avanzar: ronda ${roundNumber}, mesa ${tableNumber} tiene jugadores duplicados.`
+          return `No se puede avanzar: ronda ${roundNumber}, mesa ${tableNumber} tiene participantes duplicados.`
         }
 
         for (const playerId of pod.playerIds) {
@@ -1556,7 +1609,7 @@ function TournamentWorkspace({
         (player) => !assignedPlayerIds.has(player.id),
       )
       if (unassignedPlayers.length > 0) {
-        return `No se puede avanzar: en la ronda ${roundNumber} faltan jugadores por asignar: ${unassignedPlayers.map((player) => player.name).join(', ')}.`
+          return `No se puede avanzar: en la ronda ${roundNumber} faltan ${tournament.format === 'two-headed-giant' ? 'parejas' : 'jugadores'} por asignar: ${unassignedPlayers.map((player) => player.name).join(', ')}.`
       }
 
       for (let podIndex = 0; podIndex < round.pods.length; podIndex += 1) {
@@ -1629,10 +1682,15 @@ function TournamentWorkspace({
       return
     }
 
-    const podSizes = getBalancedPodSizes(selectedTournament.players.length)
+    const podSizes = getBalancedPodSizes(
+      selectedTournament.players.length,
+      selectedTournament.format,
+    )
     if (!podSizes) {
       setRoundGenerationError(
-        `No existe una distribución válida para ${selectedTournament.players.length} jugadores: las mesas deben tener 3 o 4 jugadores y no puede quedar nadie fuera.`,
+        selectedTournament.format === 'two-headed-giant'
+          ? `Para Dos Cabezas necesitas un número par de parejas (al menos 2); cada mesa enfrenta exactamente 2 parejas. Ahora hay ${selectedTournament.players.length}.`
+          : `No existe una distribución válida para ${selectedTournament.players.length} jugadores: las mesas deben tener 3 o 4 jugadores y no puede quedar nadie fuera.`,
       )
       return
     }
@@ -1659,7 +1717,11 @@ function TournamentWorkspace({
         if (!pod.result) {
           return
         }
-        getPodPoints(pod.result, pod.playerIds.length).forEach(
+        getPodPoints(
+          pod.result,
+          pod.playerIds.length,
+          selectedTournament.format,
+        ).forEach(
           (points, playerId) => {
             pointsByPlayerId.set(
               playerId,
@@ -1729,7 +1791,7 @@ function TournamentWorkspace({
 
     if (
       !pod ||
-      pod.playerIds.length >= 4 ||
+      pod.playerIds.length >= getPodCapacity(selectedTournament.format) ||
       alreadyAssigned ||
       !selectedTournament.players.some(({ id }) => id === playerId)
     ) {
@@ -1789,13 +1851,28 @@ function TournamentWorkspace({
 
   function startEditingPodResult(pod: Pod) {
     const ranksByPlayerId = new Map<string, string>()
-    let place = 1
-    pod.result?.placements.forEach((placement) => {
-      placement.forEach((playerId) =>
-        ranksByPlayerId.set(playerId, String(place)),
-      )
-      place += placement.length
-    })
+    if (selectedTournament?.format === 'two-headed-giant') {
+      if (pod.result?.placements.length === 1) {
+        pod.result.placements[0].forEach((teamId) =>
+          ranksByPlayerId.set(teamId, 'draw'),
+        )
+      } else {
+        pod.result?.placements[0]?.forEach((teamId) =>
+          ranksByPlayerId.set(teamId, 'win'),
+        )
+        pod.result?.placements[1]?.forEach((teamId) =>
+          ranksByPlayerId.set(teamId, 'loss'),
+        )
+      }
+    } else {
+      let place = 1
+      pod.result?.placements.forEach((placement) => {
+        placement.forEach((playerId) =>
+          ranksByPlayerId.set(playerId, String(place)),
+        )
+        place += placement.length
+      })
+    }
 
     setPodResultDrafts((current) => ({
       ...current,
@@ -1819,16 +1896,25 @@ function TournamentWorkspace({
   ) {
     event.preventDefault()
     const draft = podResultDrafts[pod.id] ?? {}
-    if (pod.playerIds.length !== 3 && pod.playerIds.length !== 4) {
+    if (
+      !selectedTournament ||
+      !isSupportedPodSize(selectedTournament.format, pod.playerIds.length)
+    ) {
       setPodResultErrors((current) => ({
         ...current,
         [pod.id]:
-          'Solo se pueden registrar resultados para pods de 3 o 4 jugadores.',
+          selectedTournament?.format === 'two-headed-giant'
+            ? 'Solo se pueden registrar resultados para una mesa de 2 parejas.'
+            : 'Solo se pueden registrar resultados para pods de 3 o 4 jugadores.',
       }))
       return
     }
 
-    const placementResult = buildPlacementsFromRanks(pod.playerIds, draft)
+    const placementResult = buildPlacementsFromRanks(
+      pod.playerIds,
+      draft,
+      selectedTournament.format,
+    )
     if (!placementResult.valid) {
       setPodResultErrors((current) => ({
         ...current,
@@ -2122,8 +2208,12 @@ function TournamentWorkspace({
                               <span className="mt-1 block text-xs text-slate-300">
                                 {tournament.players.length}{' '}
                                 {tournament.players.length === 1
-                                  ? 'participante'
-                                  : 'participantes'}
+                                  ? tournament.format === 'two-headed-giant'
+                                    ? 'pareja'
+                                    : 'jugador'
+                                  : tournament.format === 'two-headed-giant'
+                                    ? 'parejas'
+                                    : 'jugadores'}
                                 {' · '}
                                 {tournament.rounds.length}{' '}
                                 {tournament.rounds.length === 1
@@ -2194,6 +2284,52 @@ function TournamentWorkspace({
                   value={tournamentName}
                 />
               </div>
+
+              <fieldset>
+                <legend className="mb-2 block text-sm font-medium text-slate-200">
+                  Modalidad
+                </legend>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {[
+                    {
+                      value: 'commander' as const,
+                      title: 'Commander',
+                      details: 'Mesas de 3 o 4 jugadores',
+                    },
+                    {
+                      value: 'two-headed-giant' as const,
+                      title: 'Dos Cabezas',
+                      details: 'Parejas: victoria 4 · empate 2 · derrota 0',
+                    },
+                  ].map((option) => (
+                    <label
+                      className={`flex cursor-pointer gap-3 rounded-xl border p-4 transition ${
+                        tournamentFormat === option.value
+                          ? 'border-amber-300/70 bg-amber-300/10'
+                          : 'border-slate-700 bg-slate-950/40 hover:border-slate-500'
+                      }`}
+                      key={option.value}
+                    >
+                      <input
+                        checked={tournamentFormat === option.value}
+                        className="mt-1 accent-amber-300"
+                        name="tournament-format"
+                        onChange={() => setTournamentFormat(option.value)}
+                        type="radio"
+                        value={option.value}
+                      />
+                      <span>
+                        <span className="block font-semibold text-slate-100">
+                          {option.title}
+                        </span>
+                        <span className="mt-1 block text-xs text-slate-400">
+                          {option.details}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
 
               <div className="grid gap-5 sm:grid-cols-2">
                 <div>
@@ -2280,8 +2416,12 @@ function TournamentWorkspace({
                         <span className="mt-1 block text-xs text-slate-400">
                           {tournament.players.length}{' '}
                           {tournament.players.length === 1
-                            ? 'participante'
-                            : 'participantes'}
+                            ? tournament.format === 'two-headed-giant'
+                              ? 'pareja'
+                              : 'jugador'
+                            : tournament.format === 'two-headed-giant'
+                              ? 'parejas'
+                              : 'jugadores'}
                         </span>
                       </button>
                     </li>
@@ -2408,6 +2548,11 @@ function TournamentWorkspace({
                     ) : (
                       <>
                         <h2 id="players-heading">{selectedTournament.name}</h2>
+                        <p className="mt-2 text-sm font-medium text-amber-200">
+                          {selectedTournament.format === 'two-headed-giant'
+                            ? 'Dos Cabezas · parejas · 4 puntos por victoria'
+                            : 'Commander · mesas individuales'}
+                        </p>
                         {(selectedTournament.date ||
                           selectedTournament.location) && (
                           <p className="app-supporting-copy text-sm text-slate-400">
@@ -2432,8 +2577,8 @@ function TournamentWorkspace({
                   <span className="rounded-full border border-amber-300/30 bg-amber-300/10 px-3 py-1.5 text-sm font-semibold text-amber-200">
                     {selectedTournament.players.length}{' '}
                     {selectedTournament.players.length === 1
-                      ? 'participante'
-                      : 'participantes'}
+                      ? participantLabel
+                      : participantsLabel}
                   </span>
                 </div>
 
@@ -2458,6 +2603,7 @@ function TournamentWorkspace({
                   <PublicTournamentManager
                     adminSaving={adminSaving}
                     key={selectedTournament.id}
+                    format={selectedTournament.format}
                     tournamentId={selectedTournament.id}
                   />
                 </Suspense>
@@ -2468,7 +2614,7 @@ function TournamentWorkspace({
                 >
                   <div className="min-w-0 flex-1">
                     <label className="sr-only" htmlFor="player-name">
-                      Nombre del jugador
+                      Nombre de la {participantLabel}
                     </label>
                     <input
                       autoComplete="off"
@@ -2478,7 +2624,7 @@ function TournamentWorkspace({
                         setPlayerName(event.target.value)
                         setPlayerError('')
                       }}
-                      placeholder="Nombre del jugador"
+                      placeholder={`Nombre de la ${participantLabel}`}
                       required
                       type="text"
                       value={playerName}
@@ -2488,7 +2634,7 @@ function TournamentWorkspace({
                     className="rounded-lg border border-amber-300/50 px-5 py-3 font-semibold text-amber-200 transition hover:bg-amber-300/10"
                     type="submit"
                   >
-                    Añadir jugador
+                    Añadir {participantLabel}
                   </button>
                 </form>
 
@@ -2507,12 +2653,18 @@ function TournamentWorkspace({
                       Aún no hay participantes
                     </p>
                     <p className="app-supporting-copy text-sm text-slate-400">
-                      Añade el primer jugador para completar la mesa.
+                      {selectedTournament.format === 'two-headed-giant'
+                        ? 'Añade el nombre de cada pareja para crear sus mesas.'
+                        : 'Añade el primer jugador para completar la mesa.'}
                     </p>
                   </div>
                 ) : (
                   <ul
-                    aria-label="Lista de participantes"
+                    aria-label={
+                      selectedTournament.format === 'two-headed-giant'
+                        ? 'Lista de parejas'
+                        : 'Lista de jugadores'
+                    }
                     className="divide-y divide-white/10 rounded-xl border border-white/10"
                   >
                     {selectedTournament.players.map((player, index) => (
@@ -2635,7 +2787,11 @@ function TournamentWorkspace({
                       <p className="app-kicker text-sm font-semibold text-amber-300">
                         Organización manual
                       </p>
-                      <h2 id="rounds-heading">Rondas y pods</h2>
+                      <h2 id="rounds-heading">
+                        {selectedTournament.format === 'two-headed-giant'
+                          ? 'Rondas y mesas'
+                          : 'Rondas y pods'}
+                      </h2>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <button
@@ -2667,7 +2823,9 @@ function TournamentWorkspace({
                   {selectedTournament.rounds.length === 0 ? (
                     <p className="rounded-lg border border-dashed border-slate-700 px-4 py-5 text-sm text-slate-400">
                       Todavía no hay rondas. Crea una para empezar a organizar
-                      los pods.
+                      {selectedTournament.format === 'two-headed-giant'
+                        ? 'las mesas.'
+                        : 'los pods.'}
                     </p>
                   ) : (
                     <div className="space-y-5">
@@ -2729,14 +2887,16 @@ function TournamentWorkspace({
                                   onClick={() => addPod(round.id)}
                                   type="button"
                                 >
-                                  Añadir pod
+                                  {selectedTournament.format === 'two-headed-giant'
+                                    ? 'Añadir mesa'
+                                    : 'Añadir pod'}
                                 </button>
                               </div>
                             </div>
 
                             {round.pods.length === 0 ? (
                               <p className="mb-4 rounded-lg border border-dashed border-slate-700 px-4 py-4 text-sm text-slate-400">
-                                Esta ronda todavía no tiene pods.
+                                Esta ronda todavía no tiene mesas.
                               </p>
                             ) : (
                               <div className="mb-4 grid gap-3 sm:grid-cols-2">
@@ -2746,13 +2906,18 @@ function TournamentWorkspace({
                                       (player) =>
                                         !assignedPlayerIds.has(player.id),
                                     )
-                                  const isFull = pod.playerIds.length >= 4
+                                  const podCapacity = getPodCapacity(
+                                    selectedTournament.format,
+                                  )
+                                  const isFull =
+                                    pod.playerIds.length >= podCapacity
                                   const selectionId = `pod-player-${pod.id}`
                                   const podResult = pod.result
                                   const resultPoints = podResult
                                     ? getPodPoints(
                                         podResult,
                                         pod.playerIds.length,
+                                        selectedTournament.format,
                                       )
                                     : new Map<string, number>()
 
@@ -2766,15 +2931,20 @@ function TournamentWorkspace({
                                         className="mb-3 text-sm font-semibold text-amber-100"
                                         id={`pod-${pod.id}-heading`}
                                       >
-                                        Pod {podIndex + 1}
+                                        {selectedTournament.format ===
+                                        'two-headed-giant'
+                                          ? 'Mesa'
+                                          : 'Pod'}{' '}
+                                        {podIndex + 1}
                                         <span className="ml-2 font-normal text-slate-400">
-                                          {pod.playerIds.length}/4 jugadores
+                                          {pod.playerIds.length}/{podCapacity}{' '}
+                                          {participantsLabel}
                                         </span>
                                       </h4>
 
                                       {pod.playerIds.length === 0 ? (
                                         <p className="mb-3 text-sm text-slate-400">
-                                          Aún no hay jugadores asignados.
+                                          Todavía no hay nadie asignado a esta mesa.
                                         </p>
                                       ) : (
                                         <ul className="mb-3 space-y-2">
@@ -2796,7 +2966,7 @@ function TournamentWorkspace({
                                                   {player.name}
                                                 </span>
                                                 <button
-                                                  aria-label={`Quitar a ${player.name} del pod ${podIndex + 1} de la ronda ${roundIndex + 1}`}
+                                                  aria-label={`Quitar a ${player.name} de la ${selectedTournament.format === 'two-headed-giant' ? 'mesa' : 'pod'} ${podIndex + 1} de la ronda ${roundIndex + 1}`}
                                                   className="shrink-0 rounded px-2 py-1 text-xs text-slate-400 hover:bg-rose-400/10 hover:text-rose-300"
                                                   onClick={() =>
                                                     unassignPlayer(
@@ -2826,7 +2996,7 @@ function TournamentWorkspace({
                                           className="sr-only"
                                           htmlFor={selectionId}
                                         >
-                                          Seleccionar jugador para el pod{' '}
+                                          Seleccionar {participantLabel} para la mesa{' '}
                                           {podIndex + 1} de la ronda{' '}
                                           {roundIndex + 1}
                                         </label>
@@ -2847,10 +3017,10 @@ function TournamentWorkspace({
                                         >
                                           <option value="">
                                             {isFull
-                                              ? 'Pod completo'
+                                              ? 'Mesa completa'
                                               : availablePlayers.length === 0
-                                                ? 'No hay jugadores disponibles'
-                                                : 'Selecciona un jugador'}
+                                                ? `No hay ${participantsLabel} disponibles`
+                                                : `Selecciona ${participantLabel}`}
                                           </option>
                                           {availablePlayers.map((player) => (
                                             <option
@@ -2873,20 +3043,20 @@ function TournamentWorkspace({
                                           }
                                           type="submit"
                                         >
-                                          Asignar jugador
+                                          Asignar {participantLabel}
                                         </button>
                                       </form>
 
                                       <div className="mt-4 border-t border-white/10 pt-4">
-                                        {pod.playerIds.length < 3 ? (
+                                        {!isSupportedPodSize(
+                                          selectedTournament.format,
+                                          pod.playerIds.length,
+                                        ) ? (
                                           <p className="text-sm text-slate-400">
-                                            Se necesitan al menos 3 jugadores
-                                            para registrar un resultado.
-                                          </p>
-                                        ) : pod.playerIds.length > 4 ? (
-                                          <p className="text-sm text-slate-400">
-                                            Este pod supera el máximo de 4
-                                            jugadores y no admite resultados.
+                                            {selectedTournament.format ===
+                                            'two-headed-giant'
+                                              ? 'Asigna exactamente 2 parejas para registrar el resultado de esta mesa.'
+                                              : 'Los pods necesitan 3 o 4 jugadores para registrar un resultado.'}
                                           </p>
                                         ) : editingPodResults.includes(
                                             pod.id,
@@ -2904,11 +3074,10 @@ function TournamentWorkspace({
                                                   : 'Registrar resultado'}
                                               </h5>
                                               <p className="app-supporting-copy text-xs text-slate-400">
-                                                Asigna el mismo puesto a las
-                                                personas empatadas. Tras un
-                                                empate, el siguiente puesto
-                                                avanza según el número de
-                                                jugadores empatados.
+                                                {selectedTournament.format ===
+                                                'two-headed-giant'
+                                                  ? 'Marca Gana y Pierde para un resultado normal, o Empate para las dos parejas.'
+                                                  : 'Asigna el mismo puesto a las personas empatadas. Tras un empate, el siguiente puesto avanza según el número de jugadores empatados.'}
                                               </p>
                                             </div>
                                             <ul className="space-y-2">
@@ -2961,20 +3130,40 @@ function TournamentWorkspace({
                                                         }
                                                       >
                                                         <option value="">
-                                                          Puesto
+                                                          {selectedTournament.format ===
+                                                          'two-headed-giant'
+                                                            ? 'Resultado'
+                                                            : 'Puesto'}
                                                         </option>
-                                                        {pod.playerIds.map(
-                                                          (_, placeIndex) => (
+                                                        {selectedTournament.format ===
+                                                        'two-headed-giant' ? (
+                                                          <>
                                                             <option
-                                                              key={placeIndex + 1}
-                                                              value={
-                                                                placeIndex + 1
-                                                              }
+                                                              value="win"
                                                             >
-                                                              {placeIndex + 1}.º
-                                                              puesto
+                                                              Gana · 4 puntos
                                                             </option>
-                                                          ),
+                                                            <option value="draw">
+                                                              Empate · 2 puntos
+                                                            </option>
+                                                            <option value="loss">
+                                                              Pierde · 0 puntos
+                                                            </option>
+                                                          </>
+                                                        ) : (
+                                                          pod.playerIds.map(
+                                                            (_, placeIndex) => (
+                                                              <option
+                                                                key={placeIndex + 1}
+                                                                value={
+                                                                  placeIndex + 1
+                                                                }
+                                                              >
+                                                                {placeIndex + 1}.º
+                                                                puesto
+                                                              </option>
+                                                            ),
+                                                          )
                                                         )}
                                                       </select>
                                                     </li>
@@ -3052,8 +3241,16 @@ function TournamentWorkspace({
                                                           key={placementIndex}
                                                         >
                                                           <span className="font-medium text-slate-100">
-                                                            {place}
-                                                            .º puesto
+                                                            {selectedTournament.format ===
+                                                            'two-headed-giant'
+                                                              ? podResult.placements.length ===
+                                                                1
+                                                                ? 'Empate'
+                                                                : placementIndex ===
+                                                                  0
+                                                                ? 'Victoria'
+                                                                : 'Derrota'
+                                                              : `${place}.º puesto`}
                                                           </span>
                                                           {' — '}
                                                           {tiedPlayers
@@ -3128,8 +3325,14 @@ function TournamentWorkspace({
                               ) : (
                                 <p className="app-supporting-copy text-sm text-slate-300">
                                   {selectedTournament.players.length === 0
-                                    ? 'Añade jugadores al torneo para poder asignarlos.'
-                                    : 'Todos los jugadores están asignados en esta ronda.'}
+                                    ? selectedTournament.format ===
+                                      'two-headed-giant'
+                                      ? 'Añade parejas al torneo para poder asignarlas.'
+                                      : 'Añade jugadores al torneo para poder asignarlos.'
+                                    : selectedTournament.format ===
+                                      'two-headed-giant'
+                                      ? 'Todas las parejas están asignadas en esta ronda.'
+                                      : 'Todos los jugadores están asignados en esta ronda.'}
                                 </p>
                               )}
                             </aside>
@@ -3167,11 +3370,13 @@ function TournamentWorkspace({
                     Resultados acumulados
                   </p>
                   <h2 className="mb-4" id="standings-heading">
-                    Clasificación
+                    {selectedTournament.format === 'two-headed-giant'
+                      ? 'Clasificación de parejas'
+                      : 'Clasificación'}
                   </h2>
                   {standings.length === 0 ? (
                     <p className="rounded-lg border border-dashed border-slate-700 px-4 py-5 text-sm text-slate-400">
-                      Añade participantes para crear la clasificación del
+                      Añade {participantsLabel} para crear la clasificación del
                       torneo.
                     </p>
                   ) : (

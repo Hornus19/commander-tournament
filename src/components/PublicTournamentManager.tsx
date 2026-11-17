@@ -5,6 +5,7 @@ import {
   getPublicTournamentLink,
   revokePublicTournamentLink,
 } from '../lib/publicTournamentRepository'
+import type { TournamentFormat } from '../lib/tournamentStorage'
 
 const PUBLIC_APP_URL =
   import.meta.env.VITE_PUBLIC_APP_URL?.trim() ||
@@ -21,9 +22,11 @@ function getPublicTournamentUrl(token: string) {
 
 export default function PublicTournamentManager({
   tournamentId,
+  format,
   adminSaving,
 }: {
   tournamentId: string
+  format: TournamentFormat
   adminSaving: boolean
 }) {
   const [token, setToken] = useState<string | null>(null)
@@ -147,9 +150,10 @@ export default function PublicTournamentManager({
         Tablero público y QR
       </h3>
       <p className="app-supporting-copy mt-1 text-sm text-slate-400">
-        El enlace solo muestra la ronda elegida y los nombres de sus jugadores.
-        Guarda primero el torneo en Supabase; el tablero refleja los cambios
-        sincronizados.
+        {format === 'two-headed-giant'
+          ? 'El enlace muestra las mesas de parejas de la ronda elegida y permite enviar resultados para que el organizador los apruebe.'
+          : 'El enlace muestra la ronda elegida y los nombres de sus jugadores, y permite enviar resultados para que el organizador los apruebe.'}{' '}
+        El tablero refleja los cambios sincronizados.
       </p>
       {error && (
         <p

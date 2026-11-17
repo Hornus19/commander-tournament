@@ -7,6 +7,7 @@ export type PublicTournamentSnapshot =
   | {
       status: 'active'
       tournamentName: string
+      format: 'commander' | 'two-headed-giant'
       roundNumber: number
       tables: {
         roundId: string
@@ -82,7 +83,10 @@ function parsePublicTournamentSnapshot(
   if (
     typeof value.round_number !== 'number' ||
     !Number.isInteger(value.round_number) ||
-    !Array.isArray(value.tables)
+    !Array.isArray(value.tables) ||
+    (value.tournament_format !== undefined &&
+      value.tournament_format !== 'commander' &&
+      value.tournament_format !== 'two-headed-giant')
   ) {
     throw new Error('Supabase devolvió una vista pública con formato no válido.')
   }
@@ -127,6 +131,10 @@ function parsePublicTournamentSnapshot(
   return {
     status: 'active',
     tournamentName: value.tournament_name,
+    format:
+      value.tournament_format === 'two-headed-giant'
+        ? 'two-headed-giant'
+        : 'commander',
     roundNumber: value.round_number,
     tables,
   }

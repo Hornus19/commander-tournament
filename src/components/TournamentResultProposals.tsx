@@ -151,7 +151,9 @@ export default function TournamentResultProposals({
                     Ronda {proposal.roundNumber} · Mesa {proposal.tableNumber}
                   </h3>
                   <p className="mt-1 text-sm text-slate-300">
-                    Informa:{' '}
+                    {tournament.format === 'two-headed-giant'
+                      ? 'Informa la pareja:'
+                      : 'Informa:'}{' '}
                     {playersById.get(proposal.reporterPlayerId) ??
                       'Jugador que ya no está en la lista'}
                   </p>
@@ -197,7 +199,13 @@ export default function TournamentResultProposals({
                       key={`${proposal.id}-place-${index}`}
                     >
                       <span className="font-medium text-slate-100">
-                        {place}.º puesto
+                        {tournament.format === 'two-headed-giant'
+                          ? proposal.placements.length === 1
+                            ? 'Empate · 2 puntos'
+                            : index === 0
+                              ? 'Gana · 4 puntos'
+                              : 'Pierde · 0 puntos'
+                          : `${place}.º puesto`}
                       </span>
                       {' — '}
                       {placement

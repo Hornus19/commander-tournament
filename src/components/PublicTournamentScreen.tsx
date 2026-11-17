@@ -46,9 +46,11 @@ export default function PublicTournamentScreen({ token }: { token: string }) {
       return
     }
 
+    const format = snapshot?.status === 'active' ? snapshot.format : 'commander'
     const validation = buildPlacementsFromRanks(
       table.players.map(({ id }) => id),
       ranksByTable[table.podId] ?? {},
+      format,
     )
     if (!validation.valid) {
       setProposalErrors((current) => ({
@@ -193,6 +195,11 @@ export default function PublicTournamentScreen({ token }: { token: string }) {
             <h2 className="mt-2 text-lg font-semibold text-amber-100">
               Ronda {snapshot.roundNumber}
             </h2>
+            <p className="mt-1 text-sm text-slate-400">
+              {snapshot.format === 'two-headed-giant'
+                ? 'Dos Cabezas · parejas'
+                : 'Commander · individual'}
+            </p>
             {snapshot.tables.length === 0 ? (
               <p className="mt-5 rounded-lg border border-dashed border-slate-700 px-4 py-5 text-sm text-slate-300">
                 Esta ronda todavía no tiene mesas.
@@ -200,6 +207,11 @@ export default function PublicTournamentScreen({ token }: { token: string }) {
             ) : (
               <ul className="mt-5 grid gap-4 sm:grid-cols-2">
                 {snapshot.tables.map((table) => {
+                  const supportsResult =
+                    snapshot.format === 'two-headed-giant'
+                      ? table.players.length === 2
+                      : table.players.length >= 3 &&
+                        table.players.length <= 4
                   const isLocallyPending =
                     submittedTable?.roundId === table.roundId &&
                     submittedTable.podId === table.podId
@@ -216,7 +228,7 @@ export default function PublicTournamentScreen({ token }: { token: string }) {
                       </h3>
                       {table.players.length === 0 ? (
                         <p className="mt-3 text-sm text-slate-400">
-                          Aún no hay jugadores asignados.
+                          Aún no hay participantes asignados.
                         </p>
                       ) : (
                         <ul className="mt-3 space-y-2">
@@ -263,8 +275,7 @@ export default function PublicTournamentScreen({ token }: { token: string }) {
                       {openTablePodId === table.podId &&
                       !table.hasOfficialResult &&
                       proposalStatus !== 'pending' &&
-                      table.players.length >= 3 &&
-                      table.players.length <= 4 ? (
+                      supportsResult ? (
                         <form
                           className="mt-4 space-y-3 border-t border-white/10 pt-4"
                           onSubmit={(event) => void sendResult(event, table)}
@@ -274,7 +285,9 @@ export default function PublicTournamentScreen({ token }: { token: string }) {
                               className="mb-1 block text-sm font-medium text-slate-200"
                               htmlFor={`reporter-${table.podId}`}
                             >
-                              Quién informa
+                              {snapshot.format === 'two-headed-giant'
+                                ? 'Pareja que informa'
+                                : 'Quién informa'}
                             </label>
                             <select
                               className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white"
@@ -288,7 +301,11 @@ export default function PublicTournamentScreen({ token }: { token: string }) {
                               required
                               value={reporterByTable[table.podId] ?? ''}
                             >
-                              <option value="">Selecciona un jugador</option>
+                              <option value="">
+                                {snapshot.format === 'two-headed-giant'
+                                  ? 'Selecciona una pareja'
+                                  : 'Selecciona un jugador'}
+                              </option>
                               {table.players.map((player) => (
                                 <option key={player.id} value={player.id}>
                                   {player.name}
@@ -296,6 +313,12 @@ export default function PublicTournamentScreen({ token }: { token: string }) {
                               ))}
                             </select>
                           </div>
+                          {snapshot.format === 'two-headed-giant' && (
+                            <p className="text-xs text-slate-400">
+                              Indica Gana y Pierde, o marca Empate para las dos
+                              parejas. Los puntos se asignan automáticamente.
+                            </p>
+                          )}
                           {table.players.map((player) => (
                             <div
                               className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3"
@@ -324,15 +347,33 @@ export default function PublicTournamentScreen({ token }: { token: string }) {
                                   ranksByTable[table.podId]?.[player.id] ?? ''
                                 }
                               >
-                                <option value="">Puesto</option>
-                                {table.players.map((_, placeIndex) => (
-                                  <option
-                                    key={placeIndex + 1}
-                                    value={placeIndex + 1}
-                                  >
-                                    {placeIndex + 1}.º puesto
-                                  </option>
-                                ))}
+                                <option value="">
+                                  {snapshot.format === 'two-headed-giant'
+                                    ? 'Resultado'
+                                    : 'Puesto'}
+                                </option>
+                                {snapshot.format === 'two-headed-giant' ? (
+                                  <>
+                                    <option value="win">
+                                      Gana · 4 puntos
+                                    </option>
+                                    <option value="draw">
+                                      Empate · 2 puntos
+                                    </option>
+                                    <option value="loss">
+                                      Pierde · 0 puntos
+                                    </option>
+                                  </>
+                                ) : (
+                                  table.players.map((_, placeIndex) => (
+                                    <option
+                                      key={placeIndex + 1}
+                                      value={placeIndex + 1}
+                                    >
+                                      {placeIndex + 1}.º puesto
+                                    </option>
+                                  ))
+                                )}
                               </select>
                             </div>
                           ))}
@@ -363,8 +404,7 @@ export default function PublicTournamentScreen({ token }: { token: string }) {
                         </form>
                       ) : !table.hasOfficialResult &&
                       proposalStatus !== 'pending' &&
-                      table.players.length >= 3 &&
-                      table.players.length <= 4 ? (
+                      supportsResult ? (
                         <button
                           className="mt-4 rounded-lg border border-amber-300/40 px-3 py-2 text-sm font-medium text-amber-200 transition hover:bg-amber-300/10"
                           onClick={() => {
@@ -381,8 +421,9 @@ export default function PublicTournamentScreen({ token }: { token: string }) {
                       ) : !table.hasOfficialResult &&
                         proposalStatus !== 'pending' ? (
                         <p className="mt-4 text-sm text-slate-400">
-                          Esta mesa no tiene 3 o 4 jugadores y no admite
-                          resultados.
+                          {snapshot.format === 'two-headed-giant'
+                            ? 'Esta mesa necesita exactamente 2 parejas para admitir resultados.'
+                            : 'Esta mesa necesita 3 o 4 jugadores para admitir resultados.'}
                         </p>
                       ) : null}
                     </li>
