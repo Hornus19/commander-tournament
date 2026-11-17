@@ -5,6 +5,19 @@ export type PublicTournamentSnapshot =
   | { status: 'unavailable' }
   | { status: 'no_active_round'; tournamentName: string }
   | {
+      status: 'closed'
+      tournamentName: string
+      format: 'commander' | 'two-headed-giant'
+      closedAt: string
+      roundCount: number
+      standings: {
+        id: string
+        name: string
+        points: number
+        position: number
+      }[]
+    }
+  | {
       status: 'active'
       tournamentName: string
       format: 'commander' | 'two-headed-giant'
@@ -70,7 +83,9 @@ function parsePublicTournamentSnapshot(
   }
   if (
     typeof value.tournament_name !== 'string' ||
-    (value.status !== 'active' && value.status !== 'no_active_round')
+    (value.status !== 'active' &&
+      value.status !== 'no_active_round' &&
+      value.status !== 'closed')
   ) {
     throw new Error('Supabase devolvió una vista pública con formato no válido.')
   }
@@ -78,6 +93,48 @@ function parsePublicTournamentSnapshot(
     return {
       status: 'no_active_round',
       tournamentName: value.tournament_name,
+    }
+  }
+  if (value.status === 'closed') {
+    if (
+      (value.tournament_format !== 'commander' &&
+        value.tournament_format !== 'two-headed-giant') ||
+      typeof value.closed_at !== 'string' ||
+      !Number.isFinite(Date.parse(value.closed_at)) ||
+      typeof value.round_count !== 'number' ||
+      !Number.isInteger(value.round_count) ||
+      value.round_count < 0 ||
+      !Array.isArray(value.standings)
+    ) {
+      throw new Error('Supabase devolvió una clasificación final no válida.')
+    }
+    const standings = value.standings.map((standing) => {
+      if (
+        !isRecord(standing) ||
+        typeof standing.id !== 'string' ||
+        typeof standing.name !== 'string' ||
+        typeof standing.points !== 'number' ||
+        !Number.isFinite(standing.points) ||
+        typeof standing.position !== 'number' ||
+        !Number.isInteger(standing.position) ||
+        standing.position < 1
+      ) {
+        throw new Error('Supabase devolvió una clasificación final no válida.')
+      }
+      return {
+        id: standing.id,
+        name: standing.name,
+        points: standing.points,
+        position: standing.position,
+      }
+    })
+    return {
+      status: 'closed',
+      tournamentName: value.tournament_name,
+      format: value.tournament_format,
+      closedAt: value.closed_at,
+      roundCount: value.round_count,
+      standings,
     }
   }
   if (

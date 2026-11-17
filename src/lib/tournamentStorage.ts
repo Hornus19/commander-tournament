@@ -29,6 +29,7 @@ export type Tournament = {
   players: Player[]
   rounds: TournamentRound[]
   activeRoundId?: string
+  closedAt?: string
 }
 
 const LEGACY_STORAGE_KEY = 'commander-tournament:tournaments'
@@ -131,6 +132,9 @@ function isTournament(value: unknown): value is StoredTournament {
     value.players.every(isPlayer) &&
     (value.activeRoundId === undefined ||
       typeof value.activeRoundId === 'string') &&
+    (value.closedAt === undefined ||
+      (typeof value.closedAt === 'string' &&
+        Number.isFinite(Date.parse(value.closedAt)))) &&
     (value.rounds === undefined ||
       (Array.isArray(value.rounds) &&
         value.rounds.every((round) =>

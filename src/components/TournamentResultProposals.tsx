@@ -9,10 +9,12 @@ import type { Tournament } from '../lib/tournamentStorage'
 
 export default function TournamentResultProposals({
   tournament,
+  closed = false,
   saving,
   onApproved,
 }: {
   tournament: Tournament
+  closed?: boolean
   saving: boolean
   onApproved: (proposal: ResultProposal) => void
 }) {
@@ -66,7 +68,7 @@ export default function TournamentResultProposals({
   }, [tournament.id])
 
   async function decide(proposal: ResultProposal, approve: boolean) {
-    if (busyProposalId || saving) {
+    if (busyProposalId || saving || closed) {
       return
     }
 
@@ -126,6 +128,11 @@ export default function TournamentResultProposals({
           {error}
         </p>
       )}
+      {closed && (
+        <p className="mt-4 text-sm text-emerald-200" role="status">
+          El torneo está cerrado. Las propuestas de resultado están bloqueadas.
+        </p>
+      )}
       {loading ? (
         <p
           aria-live="polite"
@@ -170,7 +177,7 @@ export default function TournamentResultProposals({
                 <div className="flex flex-wrap gap-2">
                   <button
                     className="rounded-lg bg-emerald-400/15 px-3 py-2 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-400/25 disabled:cursor-wait disabled:opacity-50"
-                    disabled={busyProposalId !== null || saving}
+                    disabled={busyProposalId !== null || saving || closed}
                     onClick={() => void decide(proposal, true)}
                     type="button"
                   >
@@ -180,7 +187,7 @@ export default function TournamentResultProposals({
                   </button>
                   <button
                     className="rounded-lg border border-rose-400/40 px-3 py-2 text-sm font-semibold text-rose-200 transition hover:bg-rose-400/10 disabled:cursor-wait disabled:opacity-50"
-                    disabled={busyProposalId !== null || saving}
+                    disabled={busyProposalId !== null || saving || closed}
                     onClick={() => void decide(proposal, false)}
                     type="button"
                   >

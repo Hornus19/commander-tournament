@@ -853,6 +853,8 @@ function TournamentWorkspace({
     Record<string, string>
   >({})
   const [roundGenerationError, setRoundGenerationError] = useState('')
+  const [tournamentStatusError, setTournamentStatusError] = useState('')
+  const [tournamentStatusNotice, setTournamentStatusNotice] = useState('')
   const [signOutError, setSignOutError] = useState('')
   const [syncStatus, setSyncStatus] = useState<
     'pending' | 'syncing' | 'synced' | 'error'
@@ -891,6 +893,7 @@ function TournamentWorkspace({
 
   const selectedTournament =
     tournaments.find(({ id }) => id === selectedTournamentId) ?? null
+  const tournamentIsClosed = Boolean(selectedTournament?.closedAt)
   const participantLabel =
     selectedTournament?.format === 'two-headed-giant' ? 'pareja' : 'jugador'
   const participantsLabel =
@@ -1409,7 +1412,7 @@ function TournamentWorkspace({
   }
 
   function startEditingTournament() {
-    if (!selectedTournament) {
+    if (!selectedTournament || selectedTournament.closedAt) {
       return
     }
     setTournamentEditName(selectedTournament.name)
@@ -1426,6 +1429,9 @@ function TournamentWorkspace({
 
   async function saveTournamentDetails(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (!selectedTournament || selectedTournament.closedAt) {
+      return
+    }
     const name = tournamentEditName.trim()
     if (!name) {
       setTournamentEditError('El nombre del torneo es obligatorio.')
@@ -1445,6 +1451,9 @@ function TournamentWorkspace({
   }
 
   function startEditingPlayer(playerId: string, name: string) {
+    if (selectedTournament?.closedAt) {
+      return
+    }
     setEditingPlayerId(playerId)
     setPlayerEditName(name)
     setPlayerEditError('')
@@ -1456,7 +1465,7 @@ function TournamentWorkspace({
   ) {
     event.preventDefault()
     const name = playerEditName.trim()
-    if (!selectedTournament || !name) {
+    if (!selectedTournament || selectedTournament.closedAt || !name) {
       setPlayerEditError('El nombre del participante es obligatorio.')
       return
     }
@@ -1518,7 +1527,7 @@ function TournamentWorkspace({
     event.preventDefault()
     const name = playerName.trim()
 
-    if (!selectedTournament || !name) {
+    if (!selectedTournament || selectedTournament.closedAt || !name) {
       setPlayerError(`Escribe el nombre de la ${participantLabel}.`)
       return
     }
@@ -1545,7 +1554,7 @@ function TournamentWorkspace({
   }
 
   function removePlayer(playerId: string) {
-    if (!selectedTournament) {
+    if (!selectedTournament || selectedTournament.closedAt) {
       return
     }
 
@@ -1632,8 +1641,92 @@ function TournamentWorkspace({
     return null
   }
 
+  async function closeSelectedTournament() {
+    if (!selectedTournament || selectedTournament.closedAt) {
+      return
+    }
+    setTournamentStatusError('')
+    setTournamentStatusNotice('')
+
+    if (editingPlayerId || editingPodResults.length > 0) {
+      setTournamentStatusError(
+        'Guarda o cancela las ediciones abiertas antes de cerrar el torneo.',
+      )
+      return
+    }
+
+    if (selectedTournament.rounds.length === 0) {
+      setTournamentStatusError(
+        'Crea y completa al menos una ronda antes de cerrar el torneo.',
+      )
+      return
+    }
+
+    const completionError = getPreviousRoundCompletionError(
+      selectedTournament,
+      selectedTournament.rounds.length,
+    )
+    if (completionError) {
+      setTournamentStatusError(
+        completionError.replace('No se puede avanzar:', 'No se puede cerrar:'),
+      )
+      return
+    }
+
+    if (
+      !window.confirm(
+        'Al cerrar el torneo, el QR mostrará la clasificación final y dejará de aceptar resultados. ¿Quieres continuar?',
+      )
+    ) {
+      return
+    }
+
+    const saved = await updateSelectedTournament((tournament) => ({
+      ...tournament,
+      closedAt: new Date().toISOString(),
+    }))
+    if (saved) {
+      setTournamentStatusNotice(
+        adminMode
+          ? 'Torneo cerrado. El QR mostrará la clasificación final.'
+          : autoSyncEnabled
+            ? 'Torneo cerrado. El QR mostrará la clasificación cuando termine la sincronización.'
+            : 'Torneo cerrado en este dispositivo. Sincroniza los cambios para actualizar el QR.',
+      )
+    }
+  }
+
+  async function reopenSelectedTournament() {
+    if (!selectedTournament?.closedAt) {
+      return
+    }
+    setTournamentStatusError('')
+    setTournamentStatusNotice('')
+    if (
+      !window.confirm(
+        'Al reabrir el torneo, el QR volverá a mostrar la ronda activa y el organizador podrá seguir editándolo. ¿Quieres continuar?',
+      )
+    ) {
+      return
+    }
+
+    const saved = await updateSelectedTournament((tournament) => ({
+      ...tournament,
+      closedAt: undefined,
+    }))
+    if (saved) {
+      setTournamentStatusNotice(
+        adminMode
+          ? 'Torneo reabierto.'
+          : autoSyncEnabled
+            ? 'Torneo reabierto. El QR se actualizará al terminar la sincronización.'
+            : 'Torneo reabierto en este dispositivo. Sincroniza los cambios para actualizar el QR.',
+      )
+    }
+  }
+
   async function createRound() {
-    if (!selectedTournament) {
+    if (!selectedTournament || selectedTournament.closedAt) {
       return
     }
     const previousRoundError = getPreviousRoundCompletionError(
@@ -1657,7 +1750,7 @@ function TournamentWorkspace({
   }
 
   async function generateRoundAutomatically(roundId: string | null) {
-    if (!selectedTournament) {
+    if (!selectedTournament || selectedTournament.closedAt) {
       return
     }
 
@@ -1764,6 +1857,9 @@ function TournamentWorkspace({
   }
 
   function addPod(roundId: string) {
+    if (selectedTournament?.closedAt) {
+      return
+    }
     updateSelectedTournament((tournament) => ({
       ...tournament,
       rounds: tournament.rounds.map((round) =>
@@ -1779,7 +1875,7 @@ function TournamentWorkspace({
 
   function assignPlayer(roundId: string, podId: string) {
     const playerId = podSelections[podId]
-    if (!selectedTournament || !playerId) {
+    if (!selectedTournament || selectedTournament.closedAt || !playerId) {
       return
     }
 
@@ -1828,6 +1924,9 @@ function TournamentWorkspace({
   }
 
   function unassignPlayer(roundId: string, podId: string, playerId: string) {
+    if (selectedTournament?.closedAt) {
+      return
+    }
     updateSelectedTournament((tournament) => ({
       ...tournament,
       rounds: tournament.rounds.map((round) =>
@@ -1850,6 +1949,9 @@ function TournamentWorkspace({
   }
 
   function startEditingPodResult(pod: Pod) {
+    if (selectedTournament?.closedAt) {
+      return
+    }
     const ranksByPlayerId = new Map<string, string>()
     if (selectedTournament?.format === 'two-headed-giant') {
       if (pod.result?.placements.length === 1) {
@@ -1895,6 +1997,9 @@ function TournamentWorkspace({
     pod: Pod,
   ) {
     event.preventDefault()
+    if (selectedTournament?.closedAt) {
+      return
+    }
     const draft = podResultDrafts[pod.id] ?? {}
     if (
       !selectedTournament ||
@@ -1966,7 +2071,7 @@ function TournamentWorkspace({
   }
 
   function applyApprovedProposal(proposal: ResultProposal) {
-    if (!selectedTournament) {
+    if (!selectedTournament || selectedTournament.closedAt) {
       return
     }
 
@@ -2583,14 +2688,56 @@ function TournamentWorkspace({
                 </div>
 
                 {!isEditingTournament && (
-                  <button
-                    className="mb-6 rounded-lg border border-slate-600 px-4 py-2.5 text-sm font-semibold text-slate-200 transition hover:bg-white/10"
-                    disabled={adminSaving}
-                    onClick={startEditingTournament}
-                    type="button"
-                  >
-                    Editar torneo
-                  </button>
+                  <div className="mb-6 space-y-3">
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        className="rounded-lg border border-slate-600 px-4 py-2.5 text-sm font-semibold text-slate-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={adminSaving || tournamentIsClosed}
+                        onClick={startEditingTournament}
+                        type="button"
+                      >
+                        Editar torneo
+                      </button>
+                      {tournamentIsClosed ? (
+                        <button
+                          className="rounded-lg border border-emerald-300/40 px-4 py-2.5 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-300/10 disabled:cursor-wait disabled:opacity-50"
+                          disabled={adminSaving}
+                          onClick={() => void reopenSelectedTournament()}
+                          type="button"
+                        >
+                          Reabrir torneo
+                        </button>
+                      ) : (
+                        <button
+                          className="rounded-lg bg-amber-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-amber-200 disabled:cursor-wait disabled:opacity-50"
+                          disabled={adminSaving}
+                          onClick={() => void closeSelectedTournament()}
+                          type="button"
+                        >
+                          Cerrar torneo
+                        </button>
+                      )}
+                    </div>
+                    {tournamentIsClosed && (
+                      <p className="rounded-lg border border-emerald-300/20 bg-emerald-300/5 px-4 py-3 text-sm text-emerald-100">
+                        Torneo finalizado. El QR muestra la clasificación y las
+                        acciones de organización están bloqueadas.
+                      </p>
+                    )}
+                    {tournamentStatusError && (
+                      <p
+                        className="rounded-lg border border-rose-400/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-200"
+                        role="alert"
+                      >
+                        {tournamentStatusError}
+                      </p>
+                    )}
+                    {tournamentStatusNotice && (
+                      <p className="text-sm text-emerald-200" role="status">
+                        {tournamentStatusNotice}
+                      </p>
+                    )}
+                  </div>
                 )}
 
                 <Suspense
@@ -2619,6 +2766,7 @@ function TournamentWorkspace({
                     <input
                       autoComplete="off"
                       className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-base text-white placeholder:text-slate-500"
+                      disabled={tournamentIsClosed}
                       id="player-name"
                       onChange={(event) => {
                         setPlayerName(event.target.value)
@@ -2632,6 +2780,7 @@ function TournamentWorkspace({
                   </div>
                   <button
                     className="rounded-lg border border-amber-300/50 px-5 py-3 font-semibold text-amber-200 transition hover:bg-amber-300/10"
+                    disabled={adminSaving || tournamentIsClosed}
                     type="submit"
                   >
                     Añadir {participantLabel}
@@ -2754,7 +2903,7 @@ function TournamentWorkspace({
                             <button
                               aria-label={`Cambiar nombre de ${player.name}`}
                               className="rounded-md px-3 py-2 text-sm font-medium text-amber-200 transition hover:bg-amber-300/10"
-                              disabled={adminSaving}
+                              disabled={adminSaving || tournamentIsClosed}
                               onClick={() =>
                                 startEditingPlayer(player.id, player.name)
                               }
@@ -2765,7 +2914,7 @@ function TournamentWorkspace({
                             <button
                               aria-label={`Quitar a ${player.name}`}
                               className="rounded-md px-3 py-2 text-sm font-medium text-slate-400 transition hover:bg-rose-400/10 hover:text-rose-300"
-                              disabled={adminSaving}
+                              disabled={adminSaving || tournamentIsClosed}
                               onClick={() => removePlayer(player.id)}
                               type="button"
                             >
@@ -2796,6 +2945,7 @@ function TournamentWorkspace({
                     <div className="flex flex-wrap gap-2">
                       <button
                         className="rounded-lg border border-amber-300/40 px-4 py-2.5 text-sm font-semibold text-amber-200 transition hover:bg-amber-300/10"
+                        disabled={adminSaving || tournamentIsClosed}
                         onClick={createRound}
                         type="button"
                       >
@@ -2803,6 +2953,7 @@ function TournamentWorkspace({
                       </button>
                       <button
                         className="rounded-lg bg-amber-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-amber-200"
+                        disabled={adminSaving || tournamentIsClosed}
                         onClick={() => void generateRoundAutomatically(null)}
                         type="button"
                       >
@@ -2857,6 +3008,7 @@ function TournamentWorkspace({
                                   className="rounded-md border border-emerald-300/40 px-3 py-2 text-sm font-medium text-emerald-200 transition hover:bg-emerald-300/10 disabled:cursor-not-allowed disabled:opacity-60"
                                   disabled={
                                     adminSaving ||
+                                    tournamentIsClosed ||
                                     selectedTournament.activeRoundId === round.id
                                   }
                                   onClick={() =>
@@ -2875,6 +3027,7 @@ function TournamentWorkspace({
                                 </button>
                                 <button
                                   className="rounded-md border border-amber-300/40 px-3 py-2 text-sm font-medium text-amber-200 transition hover:bg-amber-300/10"
+                                  disabled={adminSaving || tournamentIsClosed}
                                   onClick={() =>
                                     void generateRoundAutomatically(round.id)
                                   }
@@ -2884,6 +3037,7 @@ function TournamentWorkspace({
                                 </button>
                                 <button
                                   className="rounded-md border border-slate-600 px-3 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/10"
+                                  disabled={adminSaving || tournamentIsClosed}
                                   onClick={() => addPod(round.id)}
                                   type="button"
                                 >
@@ -2967,7 +3121,8 @@ function TournamentWorkspace({
                                                 </span>
                                                 <button
                                                   aria-label={`Quitar a ${player.name} de la ${selectedTournament.format === 'two-headed-giant' ? 'mesa' : 'pod'} ${podIndex + 1} de la ronda ${roundIndex + 1}`}
-                                                  className="shrink-0 rounded px-2 py-1 text-xs text-slate-400 hover:bg-rose-400/10 hover:text-rose-300"
+                                                  className="shrink-0 rounded px-2 py-1 text-xs text-slate-400 hover:bg-rose-400/10 hover:text-rose-300 disabled:opacity-50"
+                                                  disabled={adminSaving || tournamentIsClosed}
                                                   onClick={() =>
                                                     unassignPlayer(
                                                       round.id,
@@ -3003,6 +3158,7 @@ function TournamentWorkspace({
                                         <select
                                           className="w-full min-w-0 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white disabled:cursor-not-allowed disabled:opacity-60"
                                           disabled={
+                                            tournamentIsClosed ||
                                             isFull ||
                                             availablePlayers.length === 0
                                           }
@@ -3034,6 +3190,8 @@ function TournamentWorkspace({
                                         <button
                                           className="rounded-lg border border-amber-300/40 px-3 py-2 text-sm font-medium text-amber-200 transition hover:bg-amber-300/10 disabled:cursor-not-allowed disabled:opacity-50"
                                           disabled={
+                                            adminSaving ||
+                                            tournamentIsClosed ||
                                             isFull ||
                                             availablePlayers.length === 0 ||
                                             !availablePlayers.some(
@@ -3282,7 +3440,8 @@ function TournamentWorkspace({
                                               </p>
                                             )}
                                             <button
-                                              className="mt-3 rounded-lg border border-amber-300/40 px-3 py-2 text-sm font-medium text-amber-200 transition hover:bg-amber-300/10"
+                                              className="mt-3 rounded-lg border border-amber-300/40 px-3 py-2 text-sm font-medium text-amber-200 transition hover:bg-amber-300/10 disabled:cursor-not-allowed disabled:opacity-50"
+                                              disabled={adminSaving || tournamentIsClosed}
                                               onClick={() =>
                                                 startEditingPodResult(pod)
                                               }
@@ -3355,6 +3514,7 @@ function TournamentWorkspace({
                  }
                 >
                  <TournamentResultProposals
+                   closed={tournamentIsClosed}
                    key={selectedTournament.id}
                    onApproved={applyApprovedProposal}
                    saving={adminSaving}

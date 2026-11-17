@@ -189,6 +189,53 @@ export default function PublicTournamentScreen({ token }: { token: string }) {
               El organizador aún no ha elegido una ronda para mostrar en el QR.
             </p>
           </div>
+        ) : snapshot?.status === 'closed' ? (
+          <div className="mt-5">
+            <p className="app-kicker text-sm font-semibold text-emerald-300">
+              Torneo finalizado
+            </p>
+            <h1 className="mt-1" id="public-tournament-heading">
+              {snapshot.tournamentName}
+            </h1>
+            <p className="mt-2 text-sm text-slate-400">
+              {snapshot.format === 'two-headed-giant'
+                ? 'Dos Cabezas · clasificación de parejas'
+                : 'Commander · clasificación final'}
+              {' · '}
+              {snapshot.roundCount}{' '}
+              {snapshot.roundCount === 1 ? 'ronda jugada' : 'rondas jugadas'}
+            </p>
+            {snapshot.standings.length === 0 ? (
+              <p className="mt-5 rounded-lg border border-dashed border-slate-700 px-4 py-5 text-sm text-slate-300">
+                El torneo se cerró sin resultados para mostrar.
+              </p>
+            ) : (
+              <ol
+                aria-label="Clasificación final del torneo"
+                className="mt-5 divide-y divide-white/10 overflow-hidden rounded-xl border border-white/10"
+              >
+                {snapshot.standings.map((standing) => (
+                  <li
+                    className="flex items-center justify-between gap-4 px-4 py-3"
+                    key={standing.id}
+                  >
+                    <div className="flex min-w-0 items-center gap-3">
+                      <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-amber-300/10 font-semibold text-amber-200">
+                        {standing.position}
+                      </span>
+                      <span className="truncate font-medium text-slate-100">
+                        {standing.name}
+                      </span>
+                    </div>
+                    <span className="shrink-0 font-semibold text-amber-200">
+                      {standing.points}{' '}
+                      {standing.points === 1 ? 'punto' : 'puntos'}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
         ) : snapshot?.status === 'active' ? (
           <div className="mt-5">
             <h1 id="public-tournament-heading">{snapshot.tournamentName}</h1>
