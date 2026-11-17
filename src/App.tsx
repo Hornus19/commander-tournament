@@ -548,6 +548,188 @@ function getPodPoints(result: PodResult, playerCount: number) {
   return points
 }
 
+function getBalancedPodSizes(playerCount: number): number[] | null {
+  const podCount = Math.ceil(playerCount / 4)
+  if (podCount === 0) {
+    return null
+  }
+
+  const smallestPodSize = Math.floor(playerCount / podCount)
+  const largerPodCount = playerCount % podCount
+  const sizes = Array.from({ length: podCount }, (_, index) =>
+    smallestPodSize + (index < largerPodCount ? 1 : 0),
+  )
+
+  return sizes.every((size) => size === 3 || size === 4) ? sizes : null
+}
+
+function getPairKey(firstPlayerId: string, secondPlayerId: string) {
+  return JSON.stringify([firstPlayerId, secondPlayerId].sort())
+}
+
+function getPreviousPartners(rounds: TournamentRound[]) {
+  const partners = new Set<string>()
+  rounds.forEach((round) => {
+    round.pods.forEach((pod) => {
+      for (let first = 0; first < pod.playerIds.length; first += 1) {
+        for (
+          let second = first + 1;
+          second < pod.playerIds.length;
+          second += 1
+        ) {
+          const key = getPairKey(
+            pod.playerIds[first],
+            pod.playerIds[second],
+          )
+          partners.add(key)
+        }
+      }
+    })
+  })
+  return partners
+}
+
+function getPodRepeatCount(
+  playerIds: string[],
+  previousPartners: Set<string>,
+) {
+  let repeats = 0
+  for (let first = 0; first < playerIds.length; first += 1) {
+    for (let second = first + 1; second < playerIds.length; second += 1) {
+      if (previousPartners.has(getPairKey(playerIds[first], playerIds[second]))) {
+        repeats += 1
+      }
+    }
+  }
+  return repeats
+}
+
+function getPodScoreSpread(
+  playerIds: string[],
+  pointsByPlayerId: Map<string, number>,
+) {
+  let spread = 0
+  for (let first = 0; first < playerIds.length; first += 1) {
+    for (let second = first + 1; second < playerIds.length; second += 1) {
+      spread += Math.abs(
+        (pointsByPlayerId.get(playerIds[first]) ?? 0) -
+          (pointsByPlayerId.get(playerIds[second]) ?? 0),
+      )
+    }
+  }
+  return spread
+}
+
+function generatePodGroups(
+  playerIds: string[],
+  podSizes: number[],
+  pointsByPlayerId: Map<string, number>,
+  previousPartners: Set<string>,
+) {
+  const orderedPlayerIds = [...playerIds].sort(
+    (first, second) =>
+      (pointsByPlayerId.get(second) ?? 0) -
+      (pointsByPlayerId.get(first) ?? 0),
+  )
+  const pods: string[][] = []
+  let nextPlayerIndex = 0
+
+  podSizes.forEach((size) => {
+    const pod: string[] = []
+    while (pod.length < size) {
+      let bestPlayerIndex = nextPlayerIndex
+      let bestRepeats = Number.POSITIVE_INFINITY
+      let bestSpread = Number.POSITIVE_INFINITY
+      for (
+        let candidateIndex = nextPlayerIndex;
+        candidateIndex < orderedPlayerIds.length;
+        candidateIndex += 1
+      ) {
+        const candidate = orderedPlayerIds[candidateIndex]
+        const candidatePod = [...pod, candidate]
+        const repeats = getPodRepeatCount(candidatePod, previousPartners)
+        const spread = getPodScoreSpread(candidatePod, pointsByPlayerId)
+        if (
+          repeats < bestRepeats ||
+          (repeats === bestRepeats && spread < bestSpread)
+        ) {
+          bestPlayerIndex = candidateIndex
+          bestRepeats = repeats
+          bestSpread = spread
+        }
+      }
+      ;[orderedPlayerIds[nextPlayerIndex], orderedPlayerIds[bestPlayerIndex]] = [
+        orderedPlayerIds[bestPlayerIndex],
+        orderedPlayerIds[nextPlayerIndex],
+      ]
+      pod.push(orderedPlayerIds[nextPlayerIndex])
+      nextPlayerIndex += 1
+    }
+    pods.push(pod)
+  })
+
+  let improved = true
+  while (improved) {
+    improved = false
+    let bestSwap:
+      | { firstPod: number; firstIndex: number; secondPod: number; secondIndex: number }
+      | undefined
+    let bestComparison = 0
+    for (let firstPod = 0; firstPod < pods.length; firstPod += 1) {
+      for (let secondPod = firstPod + 1; secondPod < pods.length; secondPod += 1) {
+        for (
+          let firstIndex = 0;
+          firstIndex < pods[firstPod].length;
+          firstIndex += 1
+        ) {
+          for (
+            let secondIndex = 0;
+            secondIndex < pods[secondPod].length;
+            secondIndex += 1
+          ) {
+            const firstCandidate = [...pods[firstPod]]
+            const secondCandidate = [...pods[secondPod]]
+            ;[firstCandidate[firstIndex], secondCandidate[secondIndex]] = [
+              secondCandidate[secondIndex],
+              firstCandidate[firstIndex],
+            ]
+            const currentRepeats =
+              getPodRepeatCount(pods[firstPod], previousPartners) +
+              getPodRepeatCount(pods[secondPod], previousPartners)
+            const candidateRepeats =
+              getPodRepeatCount(firstCandidate, previousPartners) +
+              getPodRepeatCount(secondCandidate, previousPartners)
+            const currentSpread =
+              getPodScoreSpread(pods[firstPod], pointsByPlayerId) +
+              getPodScoreSpread(pods[secondPod], pointsByPlayerId)
+            const candidateSpread =
+              getPodScoreSpread(firstCandidate, pointsByPlayerId) +
+              getPodScoreSpread(secondCandidate, pointsByPlayerId)
+            const comparison =
+              currentRepeats - candidateRepeats ||
+              currentSpread - candidateSpread
+            if (comparison > bestComparison) {
+              bestComparison = comparison
+              bestSwap = { firstPod, firstIndex, secondPod, secondIndex }
+            }
+          }
+        }
+      }
+    }
+
+    if (bestSwap) {
+      const { firstPod, firstIndex, secondPod, secondIndex } = bestSwap
+      ;[pods[firstPod][firstIndex], pods[secondPod][secondIndex]] = [
+        pods[secondPod][secondIndex],
+        pods[firstPod][firstIndex],
+      ]
+      improved = true
+    }
+  }
+
+  return pods
+}
+
 function TournamentWorkspace({
   userId,
   initialTournaments,
@@ -594,6 +776,7 @@ function TournamentWorkspace({
   const [podResultErrors, setPodResultErrors] = useState<
     Record<string, string>
   >({})
+  const [roundGenerationError, setRoundGenerationError] = useState('')
   const [signOutError, setSignOutError] = useState('')
   const [syncStatus, setSyncStatus] = useState<
     'pending' | 'syncing' | 'synced' | 'error'
@@ -1274,6 +1457,101 @@ function TournamentWorkspace({
         { id: crypto.randomUUID(), pods: [] },
       ],
     }))
+  }
+
+  async function generateRoundAutomatically(roundId: string | null) {
+    if (!selectedTournament) {
+      return
+    }
+
+    const roundIndex =
+      roundId === null
+        ? selectedTournament.rounds.length
+        : selectedTournament.rounds.findIndex((round) => round.id === roundId)
+    const existingRound =
+      roundId === null
+        ? undefined
+        : selectedTournament.rounds.find((round) => round.id === roundId)
+    if (roundIndex < 0 || (roundId !== null && !existingRound)) {
+      return
+    }
+
+    const podSizes = getBalancedPodSizes(selectedTournament.players.length)
+    if (!podSizes) {
+      setRoundGenerationError(
+        `No existe una distribución válida para ${selectedTournament.players.length} jugadores: las mesas deben tener 3 o 4 jugadores y no puede quedar nadie fuera.`,
+      )
+      return
+    }
+
+    if (
+      existingRound &&
+      (existingRound.pods.length > 0 ||
+        existingRound.pods.some(
+          (pod) => pod.playerIds.length > 0 || pod.result !== undefined,
+        )) &&
+      !window.confirm(
+        'Esta ronda ya tiene mesas, asignaciones o resultados. Si continúas, se reemplazarán. ¿Quieres generar las mesas automáticamente?',
+      )
+    ) {
+      return
+    }
+
+    const previousRounds = selectedTournament.rounds.slice(0, roundIndex)
+    const pointsByPlayerId = new Map(
+      selectedTournament.players.map((player) => [player.id, 0]),
+    )
+    previousRounds.forEach((round) => {
+      round.pods.forEach((pod) => {
+        if (!pod.result) {
+          return
+        }
+        getPodPoints(pod.result, pod.playerIds.length).forEach(
+          (points, playerId) => {
+            pointsByPlayerId.set(
+              playerId,
+              (pointsByPlayerId.get(playerId) ?? 0) + points,
+            )
+          },
+        )
+      })
+    })
+
+    const playerIds = selectedTournament.players.map(({ id }) => id)
+    if (roundIndex === 0) {
+      for (let index = playerIds.length - 1; index > 0; index -= 1) {
+        const randomIndex = Math.floor(Math.random() * (index + 1))
+        ;[playerIds[index], playerIds[randomIndex]] = [
+          playerIds[randomIndex],
+          playerIds[index],
+        ]
+      }
+    }
+
+    const groups = generatePodGroups(
+      playerIds,
+      podSizes,
+      pointsByPlayerId,
+      getPreviousPartners(previousRounds),
+    )
+    const pods = groups.map((group) => ({
+      id: crypto.randomUUID(),
+      playerIds: group,
+    }))
+    const generatedRoundId = roundId ?? crypto.randomUUID()
+
+    const saved = await updateSelectedTournament((tournament) => ({
+      ...tournament,
+      rounds:
+        roundId === null
+          ? [...tournament.rounds, { id: generatedRoundId, pods }]
+          : tournament.rounds.map((round) =>
+              round.id === generatedRoundId ? { ...round, pods } : round,
+            ),
+    }))
+    if (saved) {
+      setRoundGenerationError('')
+    }
   }
 
   function addPod(roundId: string) {
@@ -2250,14 +2528,32 @@ function TournamentWorkspace({
                       </p>
                       <h2 id="rounds-heading">Rondas y pods</h2>
                     </div>
-                    <button
-                      className="rounded-lg bg-amber-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-amber-200"
-                      onClick={createRound}
-                      type="button"
-                    >
-                      Crear ronda
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        className="rounded-lg border border-amber-300/40 px-4 py-2.5 text-sm font-semibold text-amber-200 transition hover:bg-amber-300/10"
+                        onClick={createRound}
+                        type="button"
+                      >
+                        Crear ronda
+                      </button>
+                      <button
+                        className="rounded-lg bg-amber-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-amber-200"
+                        onClick={() => void generateRoundAutomatically(null)}
+                        type="button"
+                      >
+                        Crear ronda y generar mesas
+                      </button>
+                    </div>
                   </div>
+
+                  {roundGenerationError && (
+                    <p
+                      className="mb-4 rounded-lg border border-rose-400/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-200"
+                      role="alert"
+                    >
+                      {roundGenerationError}
+                    </p>
+                  )}
 
                   {selectedTournament.rounds.length === 0 ? (
                     <p className="rounded-lg border border-dashed border-slate-700 px-4 py-5 text-sm text-slate-400">
@@ -2286,13 +2582,24 @@ function TournamentWorkspace({
                               >
                                 Ronda {roundIndex + 1}
                               </h3>
-                              <button
-                                className="rounded-md border border-amber-300/40 px-3 py-2 text-sm font-medium text-amber-200 transition hover:bg-amber-300/10"
-                                onClick={() => addPod(round.id)}
-                                type="button"
-                              >
-                                Añadir pod
-                              </button>
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  className="rounded-md border border-amber-300/40 px-3 py-2 text-sm font-medium text-amber-200 transition hover:bg-amber-300/10"
+                                  onClick={() =>
+                                    void generateRoundAutomatically(round.id)
+                                  }
+                                  type="button"
+                                >
+                                  Generar mesas automáticamente
+                                </button>
+                                <button
+                                  className="rounded-md border border-slate-600 px-3 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/10"
+                                  onClick={() => addPod(round.id)}
+                                  type="button"
+                                >
+                                  Añadir pod
+                                </button>
+                              </div>
                             </div>
 
                             {round.pods.length === 0 ? (
