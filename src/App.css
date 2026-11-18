@@ -144,6 +144,11 @@
     margin-top: 9px;
   }
 
+  .tournament-print-standings-section {
+    break-before: page;
+    page-break-before: always;
+  }
+
   .tournament-print-section-heading {
     display: flex;
     align-items: baseline;

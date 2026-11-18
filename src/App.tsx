@@ -3426,7 +3426,7 @@ function TournamentWorkspace({
                         </div>
                       </section>
 
-                      <section className="tournament-print-section">
+                      <section className="tournament-print-section tournament-print-standings-section">
                         <div className="tournament-print-section-heading">
                           <h2>
                             {tournamentIsClosed
