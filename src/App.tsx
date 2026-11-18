@@ -752,6 +752,42 @@ function getPodPoints(
   return points
 }
 
+function getPodParticipantPrintResult(
+  pod: Pod,
+  playerId: string,
+  format: TournamentFormat,
+) {
+  if (!pod.result) {
+    return 'Pendiente'
+  }
+
+  const placementIndex = pod.result.placements.findIndex((placement) =>
+    placement.includes(playerId),
+  )
+  if (placementIndex < 0) {
+    return '—'
+  }
+
+  const position =
+    1 +
+    pod.result.placements
+      .slice(0, placementIndex)
+      .reduce((total, placement) => total + placement.length, 0)
+  const points = getPodPoints(pod.result, pod.playerIds.length, format).get(
+    playerId,
+  ) ?? 0
+  const resultLabel =
+    format === 'two-headed-giant'
+      ? pod.result.placements.length === 1
+        ? 'Empate'
+        : placementIndex === 0
+          ? 'Gana'
+          : 'Pierde'
+      : `${position}.º`
+
+  return `${resultLabel} · ${points} pt`
+}
+
 function getBalancedPodSizes(
   playerCount: number,
   format: TournamentFormat,
@@ -3201,7 +3237,7 @@ function TournamentWorkspace({
                             onClick={() => window.print()}
                             type="button"
                           >
-                            Imprimir / guardar PDF
+                            Imprimir torneo / guardar PDF
                           </button>
                         </div>
                       </div>
@@ -3298,10 +3334,7 @@ function TournamentWorkspace({
                       <section className="tournament-print-section">
                         <div className="tournament-print-section-heading">
                           <h2>
-                            Ronda {controlRoundNumber} ·{' '}
-                            {selectedTournament.format === 'two-headed-giant'
-                              ? 'mesas'
-                              : 'pods'}
+                            Todas las rondas · {selectedTournament.rounds.length}
                           </h2>
                           <p>
                             {selectedTournament.players.length}{' '}
@@ -3312,120 +3345,85 @@ function TournamentWorkspace({
                               : selectedTournament.players.length === 1
                                 ? 'jugador'
                                 : 'jugadores'}
-                            {' · '}
-                            {controlRound.pods.length}{' '}
-                            {controlRound.pods.length === 1 ? 'mesa' : 'mesas'}
+                            {' · Resultados oficiales junto a cada nombre'}
                           </p>
                         </div>
-                        {controlRound.pods.length > 0 ? (
-                          <div className="tournament-print-grid">
-                            {controlRound.pods.map((pod, podIndex) => {
-                              const podPoints = pod.result
-                                ? getPodPoints(
-                                    pod.result,
-                                    pod.playerIds.length,
-                                    selectedTournament.format,
-                                  )
-                                : new Map<string, number>()
+                        <div
+                          className="tournament-print-rounds-grid"
+                          style={{
+                            gridTemplateColumns: `repeat(${Math.min(
+                              3,
+                              selectedTournament.rounds.length,
+                            )}, minmax(0, 1fr))`,
+                          }}
+                        >
+                          {selectedTournament.rounds.map((round, roundIndex) => {
+                            const assignedPlayerIds = new Set(
+                              round.pods.flatMap((pod) => pod.playerIds),
+                            )
+                            const unassignedPlayers =
+                              selectedTournament.players.filter(
+                                (player) =>
+                                  !assignedPlayerIds.has(player.id),
+                              )
 
-                              return (
-                                <article
-                                  className="tournament-print-card"
-                                  key={pod.id}
-                                >
-                                  <h3>
-                                    {selectedTournament.format ===
-                                    'two-headed-giant'
-                                      ? 'Mesa'
-                                      : 'Pod'}{' '}
-                                    {podIndex + 1}
-                                  </h3>
-                                  <ul>
-                                    {pod.playerIds.map((playerId) => (
-                                      <li key={playerId}>
-                                        {selectedTournament.players.find(
-                                          (player) => player.id === playerId,
-                                        )?.name ?? 'Participante no disponible'}
-                                      </li>
-                                    ))}
-                                  </ul>
-                                  {pod.result ? (
-                                    <ol>
-                                      {pod.result.placements.map(
-                                        (placement, placementIndex) => {
-                                          const position =
-                                            pod.result?.placements
-                                              .slice(0, placementIndex)
-                                              .reduce(
-                                                (total, previous) =>
-                                                  total + previous.length,
-                                                1,
-                                              ) ?? 1
-                                          const outcomeLabel =
-                                            selectedTournament.format ===
-                                            'two-headed-giant'
-                                              ? pod.result?.placements.length ===
-                                                1
-                                                ? 'Empate'
-                                                : placementIndex === 0
-                                                  ? 'Gana'
-                                                  : 'Pierde'
-                                              : `${position}.º puesto`
-                                          const points =
-                                            podPoints.get(placement[0]) ?? 0
-                                          const names = placement
-                                            .map(
-                                              (playerId) =>
-                                                selectedTournament.players.find(
+                            return (
+                              <section
+                                className="tournament-print-round"
+                                key={round.id}
+                              >
+                                <h3>Ronda {roundIndex + 1}</h3>
+                                {round.pods.length > 0 ? (
+                                  <div className="tournament-print-tables">
+                                    {round.pods.map((pod, podIndex) => (
+                                      <article
+                                        className="tournament-print-card"
+                                        key={pod.id}
+                                      >
+                                        <h4>Mesa {podIndex + 1}</h4>
+                                        <ul>
+                                          {pod.playerIds.map((playerId) => (
+                                            <li
+                                              className="tournament-print-player-line"
+                                              key={playerId}
+                                            >
+                                              <span className="tournament-print-player-name">
+                                                {selectedTournament.players.find(
                                                   (player) =>
                                                     player.id === playerId,
                                                 )?.name ??
-                                                'Participante no disponible',
-                                            )
-                                            .join(', ')
-
-                                          return (
-                                            <li
-                                              key={`${pod.id}-place-${placementIndex}`}
-                                            >
-                                              <strong>{outcomeLabel}:</strong>{' '}
-                                              {names} · {points}{' '}
-                                              {points === 1 ? 'punto' : 'puntos'}
+                                                  'Participante no disponible'}
+                                              </span>
+                                              <span className="tournament-print-player-result">
+                                                {getPodParticipantPrintResult(
+                                                  pod,
+                                                  playerId,
+                                                  selectedTournament.format,
+                                                )}
+                                              </span>
                                             </li>
-                                          )
-                                        },
-                                      )}
-                                    </ol>
-                                  ) : (
-                                    <p className="tournament-print-pending">
-                                      Resultado oficial pendiente
-                                    </p>
-                                  )}
-                                </article>
-                              )
-                            })}
-                          </div>
-                        ) : (
-                          <p>No hay mesas en esta ronda todavía.</p>
-                        )}
-
-                        {controlRoundUnassignedCount > 0 && (
-                          <p className="tournament-print-unassigned">
-                            <strong>
-                              {selectedTournament.format === 'two-headed-giant'
-                                ? 'Parejas'
-                                : 'Jugadores'}{' '}
-                              sin asignar:{' '}
-                            </strong>
-                            {selectedTournament.players
-                              .filter(
-                                (player) =>
-                                  !controlRoundAssignedPlayerIds.has(player.id),
-                              )
-                              .map((player) => player.name)
-                              .join(', ')}
-                          </p>
-                        )}
+                                          ))}
+                                        </ul>
+                                      </article>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="tournament-print-pending">
+                                    Aún no hay mesas.
+                                  </p>
+                                )}
+                                {unassignedPlayers.length > 0 && (
+                                  <p className="tournament-print-unassigned">
+                                    <strong>Sin asignar: </strong>
+                                    {unassignedPlayers
+                                      .map((player) => player.name)
+                                      .join(', ')}
+                                  </p>
+                                )}
+                              </section>
+                            )
+                          })}
+                        </div>
                       </section>
 
                       <section className="tournament-print-section">

@@ -66,7 +66,8 @@
 
 @media print {
   @page {
-    margin: 14mm;
+    size: A4 landscape;
+    margin: 10mm;
   }
 
   html,
@@ -93,7 +94,7 @@
     background: #fff !important;
     color: #111827 !important;
     font-family: Arial, Helvetica, sans-serif !important;
-    font-size: 10pt !important;
+    font-size: 8pt !important;
   }
 
   .tournament-print-report h1,
@@ -111,17 +112,17 @@
     align-items: center;
     gap: 12px;
     border-bottom: 2px solid #d1d5db;
-    padding-bottom: 14px;
+    padding-bottom: 8px;
   }
 
   .tournament-print-header img {
-    width: 46px;
-    height: 46px;
+    width: 36px;
+    height: 36px;
   }
 
   .tournament-print-header h1 {
     margin: 0 0 4px;
-    font-size: 22pt;
+    font-size: 17pt;
   }
 
   .tournament-print-header p,
@@ -133,14 +134,14 @@
   .tournament-print-kicker {
     margin-bottom: 3px !important;
     color: #8a5a00 !important;
-    font-size: 9pt;
+    font-size: 7.5pt;
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
 
   .tournament-print-section {
-    margin-top: 18px;
+    margin-top: 9px;
   }
 
   .tournament-print-section-heading {
@@ -148,56 +149,81 @@
     align-items: baseline;
     justify-content: space-between;
     gap: 12px;
-    margin-bottom: 10px;
+    margin-bottom: 6px;
   }
 
   .tournament-print-section-heading h2 {
     margin: 0;
-    font-size: 15pt;
+    font-size: 11pt;
   }
 
   .tournament-print-section-heading p {
+    font-size: 7.5pt;
+  }
+
+  .tournament-print-rounds-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: start;
+    gap: 7px;
+  }
+
+  .tournament-print-round {
+    break-inside: avoid;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    padding: 7px;
+  }
+
+  .tournament-print-round h3 {
+    margin: 0 0 5px;
+    border-bottom: 1px solid #d1d5db;
+    padding-bottom: 4px;
     font-size: 9pt;
   }
 
-  .tournament-print-grid {
+  .tournament-print-tables {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 9px;
+    gap: 5px;
   }
 
   .tournament-print-card {
     break-inside: avoid;
     border: 1px solid #cbd5e1;
     border-radius: 6px;
-    padding: 10px 12px;
+    padding: 5px 6px;
   }
 
-  .tournament-print-card h3 {
-    margin: 0 0 6px;
-    font-size: 11pt;
-  }
-
-  .tournament-print-card ul,
-  .tournament-print-card ol {
-    margin: 0;
-    padding-left: 20px;
+  .tournament-print-card h4 {
+    margin: 0 0 3px;
+    font-size: 8pt;
   }
 
   .tournament-print-card ul {
-    list-style: disc;
+    margin: 0;
+    padding: 0;
+    list-style: none;
   }
 
-  .tournament-print-card li {
+  .tournament-print-player-line {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 4px;
     margin-top: 2px;
   }
 
-  .tournament-print-card ol {
-    margin-top: 7px;
-    border-top: 1px solid #e5e7eb;
-    padding-top: 6px;
-    font-size: 9pt;
-    list-style: decimal;
+  .tournament-print-player-name {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .tournament-print-player-result {
+    flex-shrink: 0;
+    color: #4b5563 !important;
+    font-size: 7pt;
+    text-align: right;
+    white-space: nowrap;
   }
 
   .tournament-print-pending {
@@ -205,7 +231,7 @@
     border-top: 1px solid #e5e7eb;
     padding-top: 6px;
     color: #92400e !important;
-    font-size: 9pt;
+    font-size: 7pt;
     font-weight: 600;
   }
 
@@ -238,6 +264,6 @@
     border-top: 1px solid #d1d5db;
     padding-top: 7px;
     color: #6b7280 !important;
-    font-size: 8pt;
+    font-size: 7pt;
   }
 }
