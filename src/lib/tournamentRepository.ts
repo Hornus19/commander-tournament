@@ -169,6 +169,23 @@ export async function saveTournamentsToSupabase(
   }
 }
 
+export async function deleteTournamentFromSupabase(
+  userId: string,
+  tournamentId: string,
+): Promise<void> {
+  const { error } = await getSupabaseClient()
+    .from('commander_tournaments')
+    .delete()
+    .eq('id', tournamentId)
+    .eq('owner_id', userId)
+
+  if (error) {
+    throw new Error('No se pudo eliminar el torneo de la cuenta.', {
+      cause: error,
+    })
+  }
+}
+
 export async function saveAdminTournament(
   tournament: Tournament,
   ownerId: string,

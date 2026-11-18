@@ -478,6 +478,50 @@ export default function PublicTournamentScreen({ token }: { token: string }) {
                 })}
               </ul>
             )}
+            <section
+              aria-labelledby="public-standings-heading"
+              className="mt-8 border-t border-white/10 pt-6"
+            >
+              <h2
+                className="text-xl font-semibold text-slate-100"
+                id="public-standings-heading"
+              >
+                Clasificación provisional
+              </h2>
+              <p className="mt-1 text-sm text-slate-400">
+                Cuenta los resultados oficiales aprobados hasta el momento.
+              </p>
+              {snapshot.standings.length === 0 ? (
+                <p className="mt-4 text-sm text-slate-300">
+                  Todavía no hay participantes para clasificar.
+                </p>
+              ) : (
+                <ol
+                  aria-label="Clasificación provisional del torneo"
+                  className="mt-4 divide-y divide-white/10 overflow-hidden rounded-xl border border-white/10"
+                >
+                  {snapshot.standings.map((standing) => (
+                    <li
+                      className="flex items-center justify-between gap-4 px-4 py-3"
+                      key={standing.id}
+                    >
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-amber-300/10 font-semibold text-amber-200">
+                          {standing.position}
+                        </span>
+                        <span className="truncate font-medium text-slate-100">
+                          {standing.name}
+                        </span>
+                      </div>
+                      <span className="shrink-0 font-semibold text-amber-200">
+                        {standing.points}{' '}
+                        {standing.points === 1 ? 'punto' : 'puntos'}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </section>
           </div>
         ) : !error ? (
           <p

@@ -10,18 +10,14 @@ export type PublicTournamentSnapshot =
       format: 'commander' | 'two-headed-giant'
       closedAt: string
       roundCount: number
-      standings: {
-        id: string
-        name: string
-        points: number
-        position: number
-      }[]
+      standings: PublicTournamentStanding[]
     }
   | {
       status: 'active'
       tournamentName: string
       format: 'commander' | 'two-headed-giant'
       roundNumber: number
+      standings: PublicTournamentStanding[]
       tables: {
         roundId: string
         podId: string
@@ -31,6 +27,13 @@ export type PublicTournamentSnapshot =
         hasOfficialResult: boolean
       }[]
     }
+
+export type PublicTournamentStanding = {
+  id: string
+  name: string
+  points: number
+  position: number
+}
 
 export type ResultProposal = {
   id: string
@@ -60,6 +63,33 @@ function isProposalStatus(
     value === 'approved' ||
     value === 'rejected'
   )
+}
+
+function parsePublicStandings(value: unknown): PublicTournamentStanding[] {
+  if (!Array.isArray(value)) {
+    throw new Error('Supabase devolvió una clasificación pública no válida.')
+  }
+
+  return value.map((standing) => {
+    if (
+      !isRecord(standing) ||
+      typeof standing.id !== 'string' ||
+      typeof standing.name !== 'string' ||
+      typeof standing.points !== 'number' ||
+      !Number.isFinite(standing.points) ||
+      typeof standing.position !== 'number' ||
+      !Number.isInteger(standing.position) ||
+      standing.position < 1
+    ) {
+      throw new Error('Supabase devolvió una clasificación pública no válida.')
+    }
+    return {
+      id: standing.id,
+      name: standing.name,
+      points: standing.points,
+      position: standing.position,
+    }
+  })
 }
 
 function getPublicLinkManagementError(error: unknown, fallback: string) {
@@ -103,31 +133,11 @@ function parsePublicTournamentSnapshot(
       !Number.isFinite(Date.parse(value.closed_at)) ||
       typeof value.round_count !== 'number' ||
       !Number.isInteger(value.round_count) ||
-      value.round_count < 0 ||
-      !Array.isArray(value.standings)
+      value.round_count < 0
     ) {
       throw new Error('Supabase devolvió una clasificación final no válida.')
     }
-    const standings = value.standings.map((standing) => {
-      if (
-        !isRecord(standing) ||
-        typeof standing.id !== 'string' ||
-        typeof standing.name !== 'string' ||
-        typeof standing.points !== 'number' ||
-        !Number.isFinite(standing.points) ||
-        typeof standing.position !== 'number' ||
-        !Number.isInteger(standing.position) ||
-        standing.position < 1
-      ) {
-        throw new Error('Supabase devolvió una clasificación final no válida.')
-      }
-      return {
-        id: standing.id,
-        name: standing.name,
-        points: standing.points,
-        position: standing.position,
-      }
-    })
+    const standings = parsePublicStandings(value.standings)
     return {
       status: 'closed',
       tournamentName: value.tournament_name,
@@ -141,6 +151,7 @@ function parsePublicTournamentSnapshot(
     typeof value.round_number !== 'number' ||
     !Number.isInteger(value.round_number) ||
     !Array.isArray(value.tables) ||
+    !Array.isArray(value.standings) ||
     (value.tournament_format !== undefined &&
       value.tournament_format !== 'commander' &&
       value.tournament_format !== 'two-headed-giant')
@@ -193,6 +204,7 @@ function parsePublicTournamentSnapshot(
         ? 'two-headed-giant'
         : 'commander',
     roundNumber: value.round_number,
+    standings: parsePublicStandings(value.standings),
     tables,
   }
 }
@@ -273,7 +285,7 @@ export async function fetchPublicTournament(
   token: string,
 ): Promise<PublicTournamentSnapshot> {
   const { data, error } = await getSupabaseClient().rpc(
-    'get_public_tournament_view',
+    'get_public_tournament_view_with_standings',
     { p_token: token },
   )
 

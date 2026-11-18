@@ -26,6 +26,7 @@ import {
   fetchTournaments,
   hasTournamentAdminAccess,
   saveAdminTournament,
+  deleteTournamentFromSupabase,
   saveTournamentsToSupabase,
   setTournamentArchived,
   updateAutomaticSyncPreference,
@@ -1096,6 +1097,8 @@ function TournamentWorkspace({
   const [tournamentStatusNotice, setTournamentStatusNotice] = useState('')
   const [backupNotice, setBackupNotice] = useState('')
   const [backupError, setBackupError] = useState('')
+  const [tournamentDeleteError, setTournamentDeleteError] = useState('')
+  const [isDeletingTournament, setIsDeletingTournament] = useState(false)
   const [signOutError, setSignOutError] = useState('')
   const [syncStatus, setSyncStatus] = useState<
     'pending' | 'syncing' | 'synced' | 'error'
@@ -1135,6 +1138,7 @@ function TournamentWorkspace({
     [],
   )
   const adminSaveLock = useRef(false)
+  const tournamentDeletionInProgressRef = useRef(false)
   const pendingRoundScrollId = useRef<string | null>(null)
   const latestTournaments = useRef(tournaments)
   const autoSyncEnabledRef = useRef(initialAutoSyncEnabled)
@@ -1309,7 +1313,12 @@ function TournamentWorkspace({
     }
 
     const timeoutId = window.setTimeout(() => {
-      if (!autoSyncEnabledRef.current || syncReview !== null) {
+      if (
+        !autoSyncEnabledRef.current ||
+        syncReview !== null ||
+        tournamentDeletionInProgressRef.current ||
+        isDeletingTournament
+      ) {
         return
       }
       if (syncInProgressRef.current) {
@@ -1338,7 +1347,13 @@ function TournamentWorkspace({
     }, 700)
 
     return () => window.clearTimeout(timeoutId)
-  }, [adminMode, autoSyncEnabled, localSnapshot, syncReview])
+  }, [
+    adminMode,
+    autoSyncEnabled,
+    isDeletingTournament,
+    localSnapshot,
+    syncReview,
+  ])
 
   useEffect(() => {
     if (adminMode) {
@@ -1360,6 +1375,8 @@ function TournamentWorkspace({
       if (
         autoSyncEnabledRef.current &&
         autoSyncNeedsRetryRef.current &&
+        !tournamentDeletionInProgressRef.current &&
+        !isDeletingTournament &&
         syncReview === null &&
         !syncInProgressRef.current
       ) {
@@ -1374,13 +1391,15 @@ function TournamentWorkspace({
       window.removeEventListener('offline', handleOffline)
       window.removeEventListener('online', handleOnline)
     }
-  }, [adminMode, syncReview])
+  }, [adminMode, isDeletingTournament, syncReview])
 
   useEffect(() => {
     if (
       adminMode ||
       !autoSyncEnabled ||
       !autoSyncEnabledRef.current ||
+      tournamentDeletionInProgressRef.current ||
+      isDeletingTournament ||
       syncReview !== null ||
       !autoSyncQueuedRef.current
     ) {
@@ -1390,6 +1409,8 @@ function TournamentWorkspace({
     const timeoutId = window.setTimeout(() => {
       if (
         !autoSyncEnabledRef.current ||
+        tournamentDeletionInProgressRef.current ||
+        isDeletingTournament ||
         syncInProgressRef.current ||
         syncReview !== null
       ) {
@@ -1404,7 +1425,13 @@ function TournamentWorkspace({
       }
     }, 700)
     return () => window.clearTimeout(timeoutId)
-  }, [adminMode, autoSyncEnabled, syncReview, syncStatus])
+  }, [
+    adminMode,
+    autoSyncEnabled,
+    isDeletingTournament,
+    syncReview,
+    syncStatus,
+  ])
 
   function chooseConflict(id: string, choice: 'local' | 'remote') {
     if (!syncReview || syncInProgressRef.current) {
@@ -1558,6 +1585,8 @@ function TournamentWorkspace({
   async function beginSync(automatic = false) {
     if (
       syncInProgressRef.current ||
+      tournamentDeletionInProgressRef.current ||
+      isDeletingTournament ||
       (automatic && (!autoSyncEnabledRef.current || syncReview !== null))
     ) {
       return
@@ -1719,6 +1748,59 @@ function TournamentWorkspace({
     } finally {
       adminSaveLock.current = false
       setAdminSaving(false)
+    }
+  }
+
+  async function deleteSelectedTournament() {
+    if (
+      !selectedTournament ||
+      adminMode ||
+      isDeletingTournament ||
+      syncInProgressRef.current ||
+      tournamentDeletionInProgressRef.current ||
+      syncReview !== null
+    ) {
+      return
+    }
+
+    const tournamentToDelete = selectedTournament
+    const confirmed = window.confirm(
+      `¿Eliminar «${tournamentToDelete.name}»? Se borrarán también sus participantes, rondas, resultados y enlace público. Esta acción no se puede deshacer.`,
+    )
+    if (!confirmed) {
+      return
+    }
+
+    tournamentDeletionInProgressRef.current = true
+    setIsDeletingTournament(true)
+    setTournamentDeleteError('')
+    try {
+      await deleteTournamentFromSupabase(userId, tournamentToDelete.id)
+      const remainingTournaments = tournaments.filter(
+        ({ id }) => id !== tournamentToDelete.id,
+      )
+      const nextTournament = remainingTournaments[0] ?? null
+      setTournaments(remainingTournaments)
+      setSelectedTournamentId(nextTournament?.id ?? null)
+      setExpandedRoundId(
+        nextTournament?.rounds.find(
+          ({ id }) => id === nextTournament.activeRoundId,
+        )?.id ??
+          nextTournament?.rounds[nextTournament.rounds.length - 1]?.id ??
+          null,
+      )
+      setIsEditingTournament(false)
+      setBackupNotice('')
+      setBackupError('')
+    } catch (error: unknown) {
+      setTournamentDeleteError(
+        error instanceof Error
+          ? error.message
+          : 'No se pudo eliminar el torneo. Inténtalo de nuevo.',
+      )
+    } finally {
+      tournamentDeletionInProgressRef.current = false
+      setIsDeletingTournament(false)
     }
   }
 
@@ -2536,10 +2618,10 @@ function TournamentWorkspace({
 
         {!adminMode && <section
           aria-labelledby="sync-heading"
-          className="mb-6 rounded-2xl border border-white/10 bg-slate-900/80 p-5 shadow-lg shadow-black/10 sm:p-6"
+          className="mb-6 rounded-2xl border border-white/10 bg-slate-900/80 px-4 py-3 shadow-lg shadow-black/10 sm:px-5"
         >
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap items-center gap-3">
               <h2 id="sync-heading">Sincronización</h2>
               <p
                 aria-live="polite"
@@ -2562,7 +2644,11 @@ function TournamentWorkspace({
             </div>
             <button
               className="w-full rounded-lg border border-amber-300/50 px-4 py-3 font-semibold text-amber-200 transition hover:bg-amber-300/10 disabled:cursor-wait disabled:opacity-50 sm:w-auto"
-              disabled={syncStatus === 'syncing' || syncReview !== null}
+              disabled={
+                isDeletingTournament ||
+                syncStatus === 'syncing' ||
+                syncReview !== null
+              }
               onClick={() => void beginSync()}
               type="button"
             >
@@ -2570,26 +2656,31 @@ function TournamentWorkspace({
             </button>
           </div>
 
-          <div className="mt-4 flex flex-col gap-3 border-t border-white/10 pt-4 sm:flex-row sm:items-center sm:justify-between">
-            <p className="app-supporting-copy text-sm text-slate-400">
-              {autoSyncEnabled
-                ? 'La sincronización automática está activada para esta cuenta.'
-                : 'La sincronización automática solo empieza si la activas.'}
-            </p>
-            <button
-              aria-pressed={autoSyncEnabled}
-              className="rounded-lg border border-amber-300/40 px-4 py-2.5 text-sm font-semibold text-amber-200 transition hover:bg-amber-300/10 disabled:cursor-wait disabled:opacity-50"
-              disabled={autoSyncPreferenceSaving}
-              onClick={() => void changeAutomaticSync(!autoSyncEnabled)}
-              type="button"
-            >
-              {autoSyncPreferenceSaving
-                ? 'Guardando preferencia…'
-                : autoSyncEnabled
-                  ? 'Desactivar sincronización automática'
-                  : 'Activar sincronización automática'}
-            </button>
-          </div>
+          <details className="mt-2 border-t border-white/10 pt-1">
+            <summary className="cursor-pointer py-2 text-sm font-medium text-slate-300 hover:text-white">
+              Preferencias de sincronización
+            </summary>
+            <div className="flex flex-col gap-3 pb-2 sm:flex-row sm:items-center sm:justify-between">
+              <p className="app-supporting-copy text-sm text-slate-400">
+                {autoSyncEnabled
+                  ? 'La sincronización automática está activada para esta cuenta.'
+                  : 'La sincronización automática solo empieza si la activas.'}
+              </p>
+              <button
+                aria-pressed={autoSyncEnabled}
+                className="rounded-lg border border-amber-300/40 px-4 py-2.5 text-sm font-semibold text-amber-200 transition hover:bg-amber-300/10 disabled:cursor-wait disabled:opacity-50"
+                disabled={autoSyncPreferenceSaving}
+                onClick={() => void changeAutomaticSync(!autoSyncEnabled)}
+                type="button"
+              >
+                {autoSyncPreferenceSaving
+                  ? 'Guardando preferencia…'
+                  : autoSyncEnabled
+                    ? 'Desactivar sincronización automática'
+                    : 'Activar sincronización automática'}
+              </button>
+            </div>
+          </details>
 
           {autoSyncPreferenceError && (
             <p
@@ -2866,6 +2957,7 @@ function TournamentWorkspace({
                         onClick={() => {
                           pendingRoundScrollId.current = null
                           setSelectedTournamentId(tournament.id)
+                          setTournamentDeleteError('')
                           setExpandedRoundId(
                             tournament.rounds.find(
                               ({ id }) => id === tournament.activeRoundId,
@@ -3089,6 +3181,20 @@ function TournamentWorkspace({
                       >
                         Descargar copia de seguridad
                       </button>
+                      {!adminMode && (
+                        <button
+                          className="rounded-lg border border-rose-400/40 px-4 py-2.5 text-sm font-semibold text-rose-200 transition hover:bg-rose-400/10 disabled:cursor-wait disabled:opacity-50"
+                          disabled={
+                            isDeletingTournament ||
+                            syncStatus === 'syncing' ||
+                            syncReview !== null
+                          }
+                          onClick={() => void deleteSelectedTournament()}
+                          type="button"
+                        >
+                          {isDeletingTournament ? 'Eliminando…' : 'Eliminar torneo'}
+                        </button>
+                      )}
                     </div>
                     <p
                       className="app-supporting-copy text-sm text-slate-400"
@@ -3104,6 +3210,11 @@ function TournamentWorkspace({
                     {backupError && (
                       <p className="text-sm text-rose-200" role="alert">
                         {backupError}
+                      </p>
+                    )}
+                    {tournamentDeleteError && (
+                      <p className="text-sm text-rose-200" role="alert">
+                        {tournamentDeleteError}
                       </p>
                     )}
                     {tournamentIsClosed && (
