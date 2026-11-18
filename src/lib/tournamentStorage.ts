@@ -17,6 +17,7 @@ export type Pod = {
 
 export type TournamentRound = {
   id: string
+  startedAt?: string
   pods: Pod[]
 }
 
@@ -113,6 +114,9 @@ function isTournamentRound(
   return (
     isRecord(value) &&
     typeof value.id === 'string' &&
+    (value.startedAt === undefined ||
+      (typeof value.startedAt === 'string' &&
+        Number.isFinite(Date.parse(value.startedAt)))) &&
     Array.isArray(value.pods) &&
     value.pods.every((pod) => isPod(pod, format))
   )

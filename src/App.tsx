@@ -3,13 +3,17 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
 } from 'react'
 import { createPortal } from 'react-dom'
 import type { Session, SupabaseClient } from '@supabase/supabase-js'
-import type { ResultProposal } from './lib/publicTournamentRepository'
+import {
+  fetchTournamentResultProposals,
+  type ResultProposal,
+} from './lib/publicTournamentRepository'
 import {
   migrateLegacyTournaments,
   readTournamentsForSync,
@@ -784,6 +788,53 @@ function getPodPoints(
   return points
 }
 
+function getTournamentStandings(tournament: Tournament) {
+  const pointsByPlayer = new Map<string, number>(
+    tournament.players.map(({ id }) => [id, 0] as const),
+  )
+
+  for (const round of tournament.rounds) {
+    for (const pod of round.pods) {
+      if (!pod.result) {
+        continue
+      }
+      for (const [playerId, points] of getPodPoints(
+        pod.result,
+        pod.playerIds.length,
+        tournament.format,
+      )) {
+        if (pointsByPlayer.has(playerId)) {
+          pointsByPlayer.set(
+            playerId,
+            (pointsByPlayer.get(playerId) ?? 0) + points,
+          )
+        }
+      }
+    }
+  }
+
+  const sortedPlayers = tournament.players
+    .map((player) => ({
+      ...player,
+      points: pointsByPlayer.get(player.id) ?? 0,
+    }))
+    .sort(
+      (first, second) =>
+        second.points - first.points ||
+        first.name.localeCompare(second.name, 'es'),
+    )
+
+  let previousPoints: number | null = null
+  let previousPosition = 0
+  return sortedPlayers.map((player, index) => {
+    const position =
+      player.points === previousPoints ? previousPosition : index + 1
+    previousPoints = player.points
+    previousPosition = position
+    return { ...player, position }
+  })
+}
+
 function getPodParticipantPrintResult(
   pod: Pod,
   playerId: string,
@@ -1148,7 +1199,7 @@ function TournamentWorkspace({
   const autoSyncQueuedRef = useRef(false)
   const suppressAutoSyncSnapshotRef = useRef<string | null>(null)
   const persistedSnapshotRef = useRef<string | null>(null)
-  const previousTournamentSnapshotRef = useRef(canonicalJson(tournaments))
+  const previousTournamentSnapshotRef = useRef<string | null>(null)
   const retrySyncAfterReviewRef = useRef<boolean | null>(null)
   const beginSyncRef = useRef<(automatic?: boolean) => Promise<void>>(
     async () => {},
@@ -1164,46 +1215,15 @@ function TournamentWorkspace({
     selectedTournament?.format === 'two-headed-giant' ? 'pareja' : 'jugador'
   const participantsLabel =
     selectedTournament?.format === 'two-headed-giant' ? 'parejas' : 'jugadores'
-  const localSnapshot = canonicalJson(tournaments)
+  const localSnapshot = useMemo(() => canonicalJson(tournaments), [tournaments])
   const displayedSyncStatus =
     syncStatus === 'synced' && lastSyncedSnapshot !== localSnapshot
       ? 'pending'
       : syncStatus
-  const standings = selectedTournament
-    ? selectedTournament.players
-        .map((player) => {
-          const points = selectedTournament.rounds.reduce(
-            (total, round) =>
-              total +
-              round.pods.reduce((roundTotal, pod) => {
-                const podPoints = pod.result
-                  ? getPodPoints(
-                      pod.result,
-                      pod.playerIds.length,
-                      selectedTournament.format,
-                    )
-                  : new Map<string, number>()
-                return roundTotal + (podPoints.get(player.id) ?? 0)
-              }, 0),
-            0,
-          )
-          return { ...player, points }
-        })
-        .sort(
-          (first, second) =>
-            second.points - first.points ||
-            first.name.localeCompare(second.name, 'es'),
-        )
-        .map((player, index, sorted) => ({
-          ...player,
-          position:
-            index > 0 && player.points === sorted[index - 1].points
-              ? sorted.findIndex(
-                  ({ points: sortedPoints }) => sortedPoints === player.points,
-                ) + 1
-              : index + 1,
-        }))
-    : []
+  const standings = useMemo(
+    () => (selectedTournament ? getTournamentStandings(selectedTournament) : []),
+    [selectedTournament],
+  )
   const controlRound = selectedTournament
     ? selectedTournament.rounds.find(
         ({ id }) => id === selectedTournament.activeRoundId,
@@ -1295,7 +1315,7 @@ function TournamentWorkspace({
   useEffect(() => {
     const previousSnapshot = previousTournamentSnapshotRef.current
     previousTournamentSnapshotRef.current = localSnapshot
-    if (previousSnapshot === localSnapshot) {
+    if (previousSnapshot === null || previousSnapshot === localSnapshot) {
       return
     }
     if (suppressAutoSyncSnapshotRef.current === localSnapshot) {
@@ -1978,72 +1998,85 @@ function TournamentWorkspace({
     }))
   }
 
-  function getPreviousRoundCompletionError(
+  function getRoundCompletionError(
     tournament: Tournament,
-    targetRoundIndex: number,
+    roundIndex: number,
   ): string | null {
     const tournamentPlayerIds = new Set(
       tournament.players.map((player) => player.id),
     )
+    const round = tournament.rounds[roundIndex]
+    if (!round) {
+      return `No se puede avanzar: la ronda ${roundIndex + 1} no existe.`
+    }
+    const roundNumber = roundIndex + 1
+    if (round.pods.length === 0) {
+      return `No se puede avanzar: la ronda ${roundNumber} no tiene mesas. Completa sus mesas y resultados antes de continuar.`
+    }
 
-    for (let roundIndex = 0; roundIndex < targetRoundIndex; roundIndex += 1) {
-      const round = tournament.rounds[roundIndex]
-      const roundNumber = roundIndex + 1
-      if (round.pods.length === 0) {
-        return `No se puede avanzar: la ronda ${roundNumber} no tiene mesas. Completa sus mesas y resultados antes de continuar.`
+    const assignedPlayerIds = new Set<string>()
+    for (let podIndex = 0; podIndex < round.pods.length; podIndex += 1) {
+      const pod = round.pods[podIndex]
+      const tableNumber = podIndex + 1
+      if (!isSupportedPodSize(tournament.format, pod.playerIds.length)) {
+        return tournament.format === 'two-headed-giant'
+          ? `No se puede avanzar: ronda ${roundNumber}, mesa ${tableNumber} debe tener exactamente 2 parejas.`
+          : `No se puede avanzar: ronda ${roundNumber}, mesa ${tableNumber} tiene ${pod.playerIds.length} jugadores; debe tener 3 o 4.`
+      }
+      if (new Set(pod.playerIds).size !== pod.playerIds.length) {
+        return `No se puede avanzar: ronda ${roundNumber}, mesa ${tableNumber} tiene participantes duplicados.`
       }
 
-      const assignedPlayerIds = new Set<string>()
-      for (let podIndex = 0; podIndex < round.pods.length; podIndex += 1) {
-        const pod = round.pods[podIndex]
-        const tableNumber = podIndex + 1
-        if (!isSupportedPodSize(tournament.format, pod.playerIds.length)) {
-          return tournament.format === 'two-headed-giant'
-            ? `No se puede avanzar: ronda ${roundNumber}, mesa ${tableNumber} debe tener exactamente 2 parejas.`
-            : `No se puede avanzar: ronda ${roundNumber}, mesa ${tableNumber} tiene ${pod.playerIds.length} jugadores; debe tener 3 o 4.`
+      for (const playerId of pod.playerIds) {
+        if (!tournamentPlayerIds.has(playerId)) {
+          return `No se puede avanzar: ronda ${roundNumber}, mesa ${tableNumber} incluye un jugador que ya no está en el torneo.`
         }
-        if (new Set(pod.playerIds).size !== pod.playerIds.length) {
-          return `No se puede avanzar: ronda ${roundNumber}, mesa ${tableNumber} tiene participantes duplicados.`
+        if (assignedPlayerIds.has(playerId)) {
+          const playerName =
+            tournament.players.find((player) => player.id === playerId)
+              ?.name ?? playerId
+          return `No se puede avanzar: ronda ${roundNumber}, mesa ${tableNumber} vuelve a asignar a ${playerName}, que ya está en otra mesa.`
         }
-
-        for (const playerId of pod.playerIds) {
-          if (!tournamentPlayerIds.has(playerId)) {
-            return `No se puede avanzar: ronda ${roundNumber}, mesa ${tableNumber} incluye un jugador que ya no está en el torneo.`
-          }
-          if (assignedPlayerIds.has(playerId)) {
-            const playerName =
-              tournament.players.find((player) => player.id === playerId)
-                ?.name ?? playerId
-            return `No se puede avanzar: ronda ${roundNumber}, mesa ${tableNumber} vuelve a asignar a ${playerName}, que ya está en otra mesa.`
-          }
-          assignedPlayerIds.add(playerId)
-        }
-      }
-
-      const unassignedPlayers = tournament.players.filter(
-        (player) => !assignedPlayerIds.has(player.id),
-      )
-      if (unassignedPlayers.length > 0) {
-          return `No se puede avanzar: en la ronda ${roundNumber} faltan ${tournament.format === 'two-headed-giant' ? 'parejas' : 'jugadores'} por asignar: ${unassignedPlayers.map((player) => player.name).join(', ')}.`
-      }
-
-      for (let podIndex = 0; podIndex < round.pods.length; podIndex += 1) {
-        const pod = round.pods[podIndex]
-        if (!pod.result) {
-          return `No se puede avanzar: ronda ${roundNumber}, mesa ${podIndex + 1} aún no tiene un resultado oficial aprobado.`
-        }
-
-        const resultPlayerIds = pod.result.placements.flat()
-        if (
-          resultPlayerIds.length !== pod.playerIds.length ||
-          new Set(resultPlayerIds).size !== resultPlayerIds.length ||
-          resultPlayerIds.some((playerId) => !pod.playerIds.includes(playerId))
-        ) {
-          return `No se puede avanzar: ronda ${roundNumber}, mesa ${podIndex + 1} tiene un resultado oficial incompleto. Corrígelo antes de continuar.`
-        }
+        assignedPlayerIds.add(playerId)
       }
     }
 
+    const unassignedPlayers = tournament.players.filter(
+      (player) => !assignedPlayerIds.has(player.id),
+    )
+    if (unassignedPlayers.length > 0) {
+      return `No se puede avanzar: en la ronda ${roundNumber} faltan ${tournament.format === 'two-headed-giant' ? 'parejas' : 'jugadores'} por asignar: ${unassignedPlayers.map((player) => player.name).join(', ')}.`
+    }
+
+    for (let podIndex = 0; podIndex < round.pods.length; podIndex += 1) {
+      const pod = round.pods[podIndex]
+      if (!pod.result) {
+        return `No se puede avanzar: ronda ${roundNumber}, mesa ${podIndex + 1} aún no tiene un resultado oficial aprobado.`
+      }
+
+      const resultPlayerIds = pod.result.placements.flat()
+      if (
+        resultPlayerIds.length !== pod.playerIds.length ||
+        new Set(resultPlayerIds).size !== resultPlayerIds.length ||
+        resultPlayerIds.some((playerId) => !pod.playerIds.includes(playerId))
+      ) {
+        return `No se puede avanzar: ronda ${roundNumber}, mesa ${podIndex + 1} tiene un resultado oficial incompleto. Corrígelo antes de continuar.`
+      }
+    }
+
+    return null
+  }
+
+  function getPreviousRoundCompletionError(
+    tournament: Tournament,
+    targetRoundIndex: number,
+  ): string | null {
+    for (let roundIndex = 0; roundIndex < targetRoundIndex; roundIndex += 1) {
+      const error = getRoundCompletionError(tournament, roundIndex)
+      if (error) {
+        return error
+      }
+    }
     return null
   }
 
@@ -2266,6 +2299,7 @@ function TournamentWorkspace({
       playerIds: group,
     }))
     const generatedRoundId = roundId ?? crypto.randomUUID()
+    const startedAt = existingRound?.startedAt ?? new Date().toISOString()
     const previousExpandedRoundId = expandedRoundId
     if (roundId === null) {
       pendingRoundScrollId.current = generatedRoundId
@@ -2277,9 +2311,11 @@ function TournamentWorkspace({
       ...(roundId === null ? { activeRoundId: generatedRoundId } : {}),
       rounds:
         roundId === null
-          ? [...tournament.rounds, { id: generatedRoundId, pods }]
+          ? [...tournament.rounds, { id: generatedRoundId, startedAt, pods }]
           : tournament.rounds.map((round) =>
-              round.id === generatedRoundId ? { ...round, pods } : round,
+              round.id === generatedRoundId
+                ? { ...round, startedAt, pods }
+                : round,
             ),
     }))
     if (saved) {
@@ -2292,7 +2328,19 @@ function TournamentWorkspace({
   }
 
   function addPod(roundId: string) {
-    if (selectedTournament?.closedAt) {
+    if (!selectedTournament || selectedTournament.closedAt) {
+      return
+    }
+    const roundIndex = selectedTournament.rounds.findIndex(
+      (round) => round.id === roundId,
+    )
+    if (roundIndex < 0) {
+      return
+    }
+    if (getRoundCompletionError(selectedTournament, roundIndex) === null) {
+      setRoundGenerationError(
+        'No se pueden añadir mesas a una ronda que ya está completa.',
+      )
       return
     }
     updateSelectedTournament((tournament) => ({
@@ -2306,6 +2354,193 @@ function TournamentWorkspace({
           : round,
       ),
     }))
+  }
+
+  async function hasPendingResultProposal(
+    roundId: string,
+    podId?: string,
+  ): Promise<boolean | null> {
+    if (!adminMode && !adminAccess) {
+      return false
+    }
+
+    if (!selectedTournament) {
+      return null
+    }
+
+    try {
+      const proposals = await fetchTournamentResultProposals(
+        selectedTournament.id,
+      )
+      return proposals.some(
+        (proposal) =>
+          proposal.roundId === roundId &&
+          (podId === undefined || proposal.podId === podId),
+      )
+    } catch {
+      setRoundGenerationError(
+        'No se pudo comprobar si hay resultados pendientes. Inténtalo de nuevo.',
+      )
+      return null
+    }
+  }
+
+  async function deletePod(
+    roundId: string,
+    podId: string,
+    podNumber: number,
+    roundNumber: number,
+  ) {
+    if (!selectedTournament || selectedTournament.closedAt || adminSaving) {
+      return
+    }
+
+    const round = selectedTournament.rounds.find(({ id }) => id === roundId)
+    const pod = round?.pods.find(({ id }) => id === podId)
+    if (!round || !pod || round.startedAt || pod.result) {
+      setRoundGenerationError(
+        'Solo puedes eliminar mesas de una ronda que aún no se ha lanzado y no tiene resultados.',
+      )
+      return
+    }
+
+    const hasPendingProposal = await hasPendingResultProposal(roundId, podId)
+    if (hasPendingProposal === null) {
+      return
+    }
+    if (hasPendingProposal) {
+      setRoundGenerationError(
+        'No se puede eliminar esta mesa porque ya tiene una propuesta de resultado enviada desde el QR.',
+      )
+      return
+    }
+
+    const confirmed = window.confirm(
+      `¿Eliminar la mesa ${podNumber} de la ronda ${roundNumber}? Los participantes asignados quedarán sin asignar.`,
+    )
+    if (!confirmed) {
+      return
+    }
+
+    const saved = await updateSelectedTournament((tournament) => ({
+      ...tournament,
+      rounds: tournament.rounds.map((currentRound) =>
+        currentRound.id === roundId
+          ? {
+              ...currentRound,
+              pods: currentRound.pods.filter(({ id }) => id !== podId),
+            }
+          : currentRound,
+      ),
+    }))
+    if (!saved) {
+      return
+    }
+
+    setPodSelections((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([currentPodId]) => currentPodId !== podId),
+      ),
+    )
+    setPodResultDrafts((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([currentPodId]) => currentPodId !== podId),
+      ),
+    )
+    setPodResultErrors((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([currentPodId]) => currentPodId !== podId),
+      ),
+    )
+    setEditingPodResults((current) =>
+      current.filter((currentPodId) => currentPodId !== podId),
+    )
+    setRoundGenerationError('')
+  }
+
+  async function deleteRound(roundId: string, roundNumber: number) {
+    if (!selectedTournament || selectedTournament.closedAt || adminSaving) {
+      return
+    }
+
+    const round = selectedTournament.rounds.find(({ id }) => id === roundId)
+    if (!round) {
+      return
+    }
+    if (round.pods.some((pod) => pod.result)) {
+      setRoundGenerationError(
+        'No se puede eliminar una ronda que ya tiene resultados oficiales.',
+      )
+      return
+    }
+
+    const hasPendingProposal = await hasPendingResultProposal(roundId)
+    if (hasPendingProposal === null) {
+      return
+    }
+    if (hasPendingProposal) {
+      setRoundGenerationError(
+        'No se puede eliminar esta ronda porque ya hay una propuesta de resultado enviada desde el QR.',
+      )
+      return
+    }
+
+    const confirmed = window.confirm(
+      `¿Eliminar la ronda ${roundNumber}? Solo se puede borrar si todavía no tiene resultados. Esta acción no se puede deshacer.`,
+    )
+    if (!confirmed) {
+      return
+    }
+
+    const remainingRounds = selectedTournament.rounds.filter(
+      ({ id }) => id !== roundId,
+    )
+    const nextActiveRoundId =
+      selectedTournament.activeRoundId === roundId
+        ? remainingRounds[remainingRounds.length - 1]?.id
+        : selectedTournament.activeRoundId
+    const removedPodIds = new Set(round.pods.map(({ id }) => id))
+    const saved = await updateSelectedTournament((tournament) => {
+      const { activeRoundId, ...tournamentWithoutActiveRound } = tournament
+      const nextRoundId =
+        activeRoundId === roundId
+          ? remainingRounds[remainingRounds.length - 1]?.id
+          : activeRoundId
+      return {
+        ...tournamentWithoutActiveRound,
+        rounds: tournament.rounds.filter(({ id }) => id !== roundId),
+        ...(nextRoundId ? { activeRoundId: nextRoundId } : {}),
+      }
+    })
+    if (!saved) {
+      return
+    }
+
+    if (expandedRoundId === roundId) {
+      setExpandedRoundId(nextActiveRoundId ?? null)
+    }
+    if (pendingRoundScrollId.current === roundId) {
+      pendingRoundScrollId.current = null
+    }
+    setPodSelections((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([podId]) => !removedPodIds.has(podId)),
+      ),
+    )
+    setPodResultDrafts((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([podId]) => !removedPodIds.has(podId)),
+      ),
+    )
+    setPodResultErrors((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([podId]) => !removedPodIds.has(podId)),
+      ),
+    )
+    setEditingPodResults((current) =>
+      current.filter((podId) => !removedPodIds.has(podId)),
+    )
+    setRoundGenerationError('')
   }
 
   function assignPlayer(roundId: string, podId: string) {
@@ -2329,24 +2564,37 @@ function TournamentWorkspace({
       return
     }
 
+    const startedAt = new Date().toISOString()
     updateSelectedTournament((tournament) => ({
       ...tournament,
-      rounds: tournament.rounds.map((currentRound) =>
-        currentRound.id === roundId
-          ? {
-              ...currentRound,
-              pods: currentRound.pods.map((currentPod) =>
-                currentPod.id === podId
-                  ? {
-                      ...currentPod,
-                      playerIds: [...currentPod.playerIds, playerId],
-                      result: undefined,
-                    }
-                  : currentPod,
-              ),
-            }
-          : currentRound,
-      ),
+      rounds: tournament.rounds.map((currentRound) => {
+        if (currentRound.id !== roundId) {
+          return currentRound
+        }
+
+        const pods = currentRound.pods.map((currentPod) =>
+          currentPod.id === podId
+            ? {
+                ...currentPod,
+                playerIds: [...currentPod.playerIds, playerId],
+                result: undefined,
+              }
+            : currentPod,
+        )
+        const allPlayersAssigned = tournament.players.every((player) =>
+          pods.some((currentPod) =>
+            currentPod.playerIds.includes(player.id),
+          ),
+        )
+
+        return {
+          ...currentRound,
+          ...(!currentRound.startedAt && allPlayersAssigned
+            ? { startedAt }
+            : {}),
+          pods,
+        }
+      }),
     }))
     setPodSelections((current) =>
       Object.fromEntries(
@@ -2821,6 +3069,32 @@ function TournamentWorkspace({
             </section>
           )}
 
+        {selectedTournament && (
+          <nav
+            aria-label="Accesos rápidos del torneo"
+            className="sticky top-2 z-20 mb-4 -mx-1 flex gap-2 overflow-x-auto rounded-xl border border-white/10 bg-slate-950/95 p-2 shadow-lg shadow-black/20 backdrop-blur lg:hidden"
+          >
+            <a
+              className="shrink-0 rounded-lg border border-slate-700 px-3 py-2 text-sm font-medium text-slate-200 transition hover:border-amber-300/40 hover:text-amber-100"
+              href="#participants-section"
+            >
+              Participantes
+            </a>
+            <a
+              className="shrink-0 rounded-lg border border-slate-700 px-3 py-2 text-sm font-medium text-slate-200 transition hover:border-amber-300/40 hover:text-amber-100"
+              href="#rounds-heading"
+            >
+              Rondas
+            </a>
+            <a
+              className="shrink-0 rounded-lg border border-slate-700 px-3 py-2 text-sm font-medium text-slate-200 transition hover:border-amber-300/40 hover:text-amber-100"
+              href="#standings-heading"
+            >
+              Clasificación
+            </a>
+          </nav>
+        )}
+
         <div className="grid gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:gap-8">
           <section
             aria-labelledby="create-tournament-heading"
@@ -3019,10 +3293,11 @@ function TournamentWorkspace({
           </section>
 
           <section
+            id="participants-section"
             aria-labelledby={
               isEditingTournament ? 'tournament-edit-heading' : 'players-heading'
             }
-            className={`${selectedTournament ? 'order-1' : 'order-2'} lg:order-2 rounded-2xl border border-white/10 bg-slate-900/80 p-5 shadow-xl shadow-black/10 sm:p-7`}
+            className={`${selectedTournament ? 'order-1' : 'order-2'} lg:order-2 scroll-mt-24 rounded-2xl border border-white/10 bg-slate-900/80 p-5 shadow-xl shadow-black/10 sm:p-7`}
           >
             {selectedTournament ? (
               <>
@@ -3134,7 +3409,9 @@ function TournamentWorkspace({
                       </form>
                     ) : (
                       <>
-                        <h2 id="players-heading">{selectedTournament.name}</h2>
+                        <h2 className="scroll-mt-24" id="players-heading">
+                          {selectedTournament.name}
+                        </h2>
                         <p className="mt-2 text-sm font-medium text-amber-200">
                           {selectedTournament.format === 'two-headed-giant'
                             ? 'Dos Cabezas · parejas · 4 puntos por victoria'
@@ -3472,7 +3749,7 @@ function TournamentWorkspace({
                       <p className="app-kicker text-sm font-semibold text-amber-300">
                         Organización manual
                       </p>
-                      <h2 id="rounds-heading">
+                      <h2 className="scroll-mt-24" id="rounds-heading">
                         {selectedTournament.format === 'two-headed-giant'
                           ? 'Rondas y mesas'
                           : 'Rondas y pods'}
@@ -3780,6 +4057,9 @@ function TournamentWorkspace({
                     <div className="space-y-5">
                       {selectedTournament.rounds.map((round, roundIndex) => {
                         const isRoundExpanded = expandedRoundId === round.id
+                        const roundIsComplete =
+                          getRoundCompletionError(selectedTournament, roundIndex) ===
+                          null
                         const assignedPlayerIds = new Set(
                           round.pods.flatMap((pod) => pod.playerIds),
                         )
@@ -3874,13 +4154,37 @@ function TournamentWorkspace({
                                 </button>
                                 <button
                                   className="rounded-md border border-slate-600 px-3 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/10"
-                                  disabled={adminSaving || tournamentIsClosed}
+                                  disabled={
+                                    adminSaving ||
+                                    tournamentIsClosed ||
+                                    roundIsComplete
+                                  }
                                   onClick={() => addPod(round.id)}
+                                  title={
+                                    roundIsComplete
+                                      ? 'No se pueden añadir mesas a una ronda completa.'
+                                      : undefined
+                                  }
                                   type="button"
                                 >
                                   {selectedTournament.format === 'two-headed-giant'
                                     ? 'Añadir mesa'
                                     : 'Añadir pod'}
+                                </button>
+                                <button
+                                  className="rounded-md border border-rose-400/40 px-3 py-2 text-sm font-medium text-rose-200 transition hover:bg-rose-400/10 disabled:cursor-not-allowed disabled:opacity-50"
+                                  disabled={
+                                    adminSaving ||
+                                    tournamentIsClosed ||
+                                    round.pods.some((pod) => Boolean(pod.result))
+                                  }
+                                  onClick={() =>
+                                    void deleteRound(round.id, roundIndex + 1)
+                                  }
+                                  title="Solo se pueden eliminar rondas sin resultados oficiales ni propuestas pendientes."
+                                  type="button"
+                                >
+                                  Eliminar ronda
                                 </button>
                               </div>
 
@@ -3917,20 +4221,44 @@ function TournamentWorkspace({
                                       className="min-w-0 rounded-lg border border-slate-700 bg-slate-900/80 p-4"
                                       key={pod.id}
                                     >
-                                      <h4
-                                        className="mb-3 text-sm font-semibold text-amber-100"
-                                        id={`pod-${pod.id}-heading`}
-                                      >
-                                        {selectedTournament.format ===
-                                        'two-headed-giant'
-                                          ? 'Mesa'
-                                          : 'Pod'}{' '}
-                                        {podIndex + 1}
-                                        <span className="ml-2 font-normal text-slate-400">
-                                          {pod.playerIds.length}/{podCapacity}{' '}
-                                          {participantsLabel}
-                                        </span>
-                                      </h4>
+                                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                                        <h4
+                                          className="text-sm font-semibold text-amber-100"
+                                          id={`pod-${pod.id}-heading`}
+                                        >
+                                          {selectedTournament.format ===
+                                          'two-headed-giant'
+                                            ? 'Mesa'
+                                            : 'Pod'}{' '}
+                                          {podIndex + 1}
+                                          <span className="ml-2 font-normal text-slate-400">
+                                            {pod.playerIds.length}/{podCapacity}{' '}
+                                            {participantsLabel}
+                                          </span>
+                                        </h4>
+                                        <button
+                                          aria-label={`Eliminar ${selectedTournament.format === 'two-headed-giant' ? 'mesa' : 'pod'} ${podIndex + 1} de la ronda ${roundIndex + 1}`}
+                                          className="rounded-md border border-rose-400/35 px-2.5 py-1.5 text-xs font-medium text-rose-200 transition hover:bg-rose-400/10 disabled:cursor-not-allowed disabled:opacity-50"
+                                          disabled={
+                                            adminSaving ||
+                                            tournamentIsClosed ||
+                                            Boolean(round.startedAt) ||
+                                            Boolean(pod.result)
+                                          }
+                                          onClick={() =>
+                                            void deletePod(
+                                              round.id,
+                                              pod.id,
+                                              podIndex + 1,
+                                              roundIndex + 1,
+                                            )
+                                          }
+                                          title="Solo se puede eliminar antes de lanzar la ronda y si no tiene resultados."
+                                          type="button"
+                                        >
+                                          Eliminar
+                                        </button>
+                                      </div>
 
                                       {pod.playerIds.length === 0 ? (
                                         <p className="mb-3 text-sm text-slate-400">
@@ -4368,7 +4696,7 @@ function TournamentWorkspace({
                   <p className="app-kicker text-sm font-semibold text-amber-300">
                     Resultados acumulados
                   </p>
-                  <h2 className="mb-4" id="standings-heading">
+                  <h2 className="mb-4 scroll-mt-24" id="standings-heading">
                     {selectedTournament.format === 'two-headed-giant'
                       ? 'Clasificación de parejas'
                       : 'Clasificación'}

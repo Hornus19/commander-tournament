@@ -1,10 +1,11 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import {
   fetchPublicTournament,
   submitPublicTournamentResult,
   type PublicTournamentSnapshot,
 } from '../lib/publicTournamentRepository'
 import { buildPlacementsFromRanks } from '../lib/podPlacements'
+import RoundCountdown from './RoundCountdown'
 
 export default function PublicTournamentScreen({ token }: { token: string }) {
   const [snapshot, setSnapshot] = useState<PublicTournamentSnapshot | null>(
@@ -28,6 +29,26 @@ export default function PublicTournamentScreen({ token }: { token: string }) {
     podId: string
   } | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+
+  const checkRoundDeadline = useCallback(
+    async (roundId: string) => {
+      const freshSnapshot = await fetchPublicTournament(token)
+      setSnapshot(freshSnapshot)
+      if (
+        freshSnapshot.status !== 'active' ||
+        freshSnapshot.roundId !== roundId
+      ) {
+        return false
+      }
+      return freshSnapshot.tables.some(
+        (table) =>
+          table.players.length > 0 &&
+          !table.hasOfficialResult &&
+          table.proposalStatus === null,
+      )
+    },
+    [token],
+  )
 
   async function sendResult(
     event: FormEvent<HTMLFormElement>,
@@ -90,9 +111,15 @@ export default function PublicTournamentScreen({ token }: { token: string }) {
   useEffect(() => {
     let active = true
     let requestInProgress = false
+    let intervalId: number | null = null
 
     async function refresh() {
-      if (requestInProgress) {
+      if (
+        requestInProgress ||
+        !active ||
+        document.visibilityState === 'hidden' ||
+        !navigator.onLine
+      ) {
         return
       }
       requestInProgress = true
@@ -127,11 +154,57 @@ export default function PublicTournamentScreen({ token }: { token: string }) {
       }
     }
 
-    void refresh()
-    const intervalId = window.setInterval(() => void refresh(), 10_000)
+    function stopPolling() {
+      if (intervalId !== null) {
+        window.clearInterval(intervalId)
+        intervalId = null
+      }
+    }
+
+    function startPolling() {
+      if (
+        intervalId !== null ||
+        document.visibilityState === 'hidden' ||
+        !navigator.onLine
+      ) {
+        return
+      }
+      intervalId = window.setInterval(() => void refresh(), 10_000)
+    }
+
+    function refreshWhenAvailable() {
+      if (document.visibilityState !== 'hidden' && navigator.onLine) {
+        void refresh()
+        startPolling()
+      } else {
+        stopPolling()
+      }
+    }
+
+    function handleOffline() {
+      stopPolling()
+      if (active) {
+        setError('Sin conexión. El tablero se actualizará al recuperar la conexión.')
+        setLoading(false)
+      }
+    }
+
+    if (navigator.onLine) {
+      void refresh()
+      startPolling()
+    } else {
+      handleOffline()
+    }
+    document.addEventListener('visibilitychange', refreshWhenAvailable)
+    window.addEventListener('online', refreshWhenAvailable)
+    window.addEventListener('offline', handleOffline)
+
     return () => {
       active = false
-      window.clearInterval(intervalId)
+      stopPolling()
+      document.removeEventListener('visibilitychange', refreshWhenAvailable)
+      window.removeEventListener('online', refreshWhenAvailable)
+      window.removeEventListener('offline', handleOffline)
     }
   }, [token, refreshKey])
 
@@ -247,6 +320,21 @@ export default function PublicTournamentScreen({ token }: { token: string }) {
                 ? 'Dos Cabezas · parejas'
                 : 'Commander · individual'}
             </p>
+            {snapshot.roundId && snapshot.roundStartedAt && (
+              <RoundCountdown
+                hasMissingResults={snapshot.tables.some(
+                  (table) =>
+                    table.players.length > 0 &&
+                    !table.hasOfficialResult &&
+                    table.proposalStatus === null,
+                )}
+                key={snapshot.roundId}
+                onDeadline={checkRoundDeadline}
+                roundId={snapshot.roundId}
+                roundNumber={snapshot.roundNumber}
+                startedAt={snapshot.roundStartedAt}
+              />
+            )}
             {snapshot.tables.length === 0 ? (
               <p className="mt-5 rounded-lg border border-dashed border-slate-700 px-4 py-5 text-sm text-slate-300">
                 Esta ronda todavía no tiene mesas.

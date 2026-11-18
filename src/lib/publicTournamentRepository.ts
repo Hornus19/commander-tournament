@@ -17,6 +17,8 @@ export type PublicTournamentSnapshot =
       tournamentName: string
       format: 'commander' | 'two-headed-giant'
       roundNumber: number
+      roundId?: string
+      roundStartedAt?: string | null
       standings: PublicTournamentStanding[]
       tables: {
         roundId: string
@@ -159,6 +161,16 @@ function parsePublicTournamentSnapshot(
     throw new Error('Supabase devolvió una vista pública con formato no válido.')
   }
 
+  if (
+    (value.round_id !== undefined && typeof value.round_id !== 'string') ||
+    (value.round_started_at !== undefined &&
+      value.round_started_at !== null &&
+      (typeof value.round_started_at !== 'string' ||
+        !Number.isFinite(Date.parse(value.round_started_at))))
+  ) {
+    throw new Error('Supabase devolvió la hora de ronda con formato no válido.')
+  }
+
   const tables = value.tables.map((table) => {
     if (
       !isRecord(table) ||
@@ -204,6 +216,11 @@ function parsePublicTournamentSnapshot(
         ? 'two-headed-giant'
         : 'commander',
     roundNumber: value.round_number,
+    ...(typeof value.round_id === 'string' ? { roundId: value.round_id } : {}),
+    roundStartedAt:
+      typeof value.round_started_at === 'string'
+        ? value.round_started_at
+        : null,
     standings: parsePublicStandings(value.standings),
     tables,
   }

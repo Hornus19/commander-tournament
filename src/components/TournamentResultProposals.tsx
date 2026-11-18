@@ -58,7 +58,24 @@ export default function TournamentResultProposals({
 
   useEffect(() => {
     let active = true
+    let requestInProgress = false
+    let intervalId: number | null = null
     const refreshProposals = async () => {
+      if (
+        !active ||
+        requestInProgress ||
+        document.visibilityState === 'hidden'
+      ) {
+        return
+      }
+      if (!navigator.onLine) {
+        onPendingCountChange(tournament.id, summaryRoundId, null)
+        setError('Sin conexión. Las propuestas se actualizarán al reconectar.')
+        setLoading(false)
+        return
+      }
+
+      requestInProgress = true
       try {
         const loaded = await fetchTournamentResultProposals(tournament.id)
         if (active) {
@@ -86,18 +103,62 @@ export default function TournamentResultProposals({
         if (active) {
           setLoading(false)
         }
+        requestInProgress = false
+      }
+    }
+
+    const stopPolling = () => {
+      if (intervalId !== null) {
+        window.clearInterval(intervalId)
+        intervalId = null
+      }
+    }
+    const startPolling = () => {
+      if (
+        intervalId !== null ||
+        document.visibilityState === 'hidden' ||
+        !navigator.onLine
+      ) {
+        return
+      }
+      intervalId = window.setInterval(() => {
+        void refreshProposals()
+      }, 15_000)
+    }
+    const refreshWhenAvailable = () => {
+      if (document.visibilityState !== 'hidden' && navigator.onLine) {
+        void refreshProposals()
+        startPolling()
+      } else {
+        stopPolling()
+      }
+    }
+    const handleOffline = () => {
+      stopPolling()
+      if (active) {
+        onPendingCountChange(tournament.id, summaryRoundId, null)
+        setError('Sin conexión. Las propuestas se actualizarán al reconectar.')
+        setLoading(false)
       }
     }
 
     onPendingCountChange(tournament.id, summaryRoundId, null)
-    void refreshProposals()
-    const intervalId = window.setInterval(() => {
+    if (navigator.onLine) {
       void refreshProposals()
-    }, 15_000)
+      startPolling()
+    } else {
+      handleOffline()
+    }
+    document.addEventListener('visibilitychange', refreshWhenAvailable)
+    window.addEventListener('online', refreshWhenAvailable)
+    window.addEventListener('offline', handleOffline)
 
     return () => {
       active = false
-      window.clearInterval(intervalId)
+      stopPolling()
+      document.removeEventListener('visibilitychange', refreshWhenAvailable)
+      window.removeEventListener('online', refreshWhenAvailable)
+      window.removeEventListener('offline', handleOffline)
     }
   }, [onPendingCountChange, summaryRoundId, tournament.id])
 
