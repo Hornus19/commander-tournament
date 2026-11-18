@@ -2558,7 +2558,7 @@ function TournamentWorkspace({
   return (
     <main className="app-shell min-h-screen px-4 py-8 sm:px-8 sm:py-12">
       <div className="mx-auto w-full max-w-6xl">
-        <header className="mb-8 flex items-center gap-4 sm:mb-12">
+        <header className="mb-8 flex flex-wrap items-center gap-4 sm:mb-12">
           <img
             alt=""
             aria-hidden="true"
@@ -2580,18 +2580,97 @@ function TournamentWorkspace({
               Volver al panel admin
             </button>
           )}
-          <button
-            className="shrink-0 rounded-lg border border-slate-600 px-3 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/10"
-            onClick={() => {
-              setSignOutError('')
-              void onSignOut().catch(() =>
-                setSignOutError('No se pudo cerrar la sesión. Inténtalo de nuevo.'),
-              )
-            }}
-            type="button"
-          >
-            Cerrar sesión
-          </button>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {!adminMode && (
+              <>
+                <button
+                  aria-label={
+                    syncReview
+                      ? 'Hay conflictos de sincronización pendientes'
+                      : displayedSyncStatus === 'synced'
+                        ? 'Comprobar sincronización'
+                        : displayedSyncStatus === 'pending'
+                          ? 'Sincronizar cambios pendientes'
+                          : displayedSyncStatus === 'error'
+                            ? 'Reintentar sincronización'
+                            : 'Sincronizando'
+                  }
+                  aria-live="polite"
+                  className={`rounded-lg border px-3 py-2 text-xs font-semibold transition sm:text-sm ${
+                    displayedSyncStatus === 'error'
+                      ? 'border-rose-400/40 bg-rose-400/10 text-rose-200 hover:bg-rose-400/20'
+                      : displayedSyncStatus === 'synced'
+                        ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/20'
+                        : displayedSyncStatus === 'syncing'
+                          ? 'border-sky-400/40 bg-sky-400/10 text-sky-200'
+                          : 'border-amber-300/40 bg-amber-300/10 text-amber-100 hover:bg-amber-300/20'
+                  } disabled:cursor-wait disabled:opacity-60`}
+                  disabled={
+                    isDeletingTournament ||
+                    syncStatus === 'syncing' ||
+                    syncReview !== null
+                  }
+                  onClick={() => void beginSync()}
+                  title={
+                    displayedSyncStatus === 'synced'
+                      ? 'Comprobar la sincronización ahora'
+                      : undefined
+                  }
+                  type="button"
+                >
+                  {syncReview !== null
+                    ? 'Conflictos'
+                    : displayedSyncStatus === 'syncing'
+                      ? 'Sincronizando…'
+                      : displayedSyncStatus === 'error'
+                        ? 'Reintentar'
+                        : displayedSyncStatus === 'pending'
+                          ? 'Sincronizar'
+                          : 'Sincronizado'}
+                </button>
+                <details className="relative">
+                  <summary
+                    aria-label="Opciones de sincronización"
+                    className="cursor-pointer list-none rounded-lg border border-slate-600 px-3 py-2 text-xs font-medium text-slate-200 transition hover:bg-white/10 sm:text-sm"
+                  >
+                    Opciones
+                  </summary>
+                  <div className="absolute right-0 z-20 mt-2 w-72 rounded-xl border border-white/10 bg-slate-900 p-4 shadow-xl shadow-black/30">
+                    <p className="text-sm text-slate-300">
+                      {autoSyncEnabled
+                        ? 'La sincronización automática está activada para esta cuenta.'
+                        : 'La sincronización automática solo empieza si la activas.'}
+                    </p>
+                    <button
+                      aria-pressed={autoSyncEnabled}
+                      className="mt-3 w-full rounded-lg border border-amber-300/40 px-3 py-2 text-sm font-semibold text-amber-200 transition hover:bg-amber-300/10 disabled:cursor-wait disabled:opacity-50"
+                      disabled={autoSyncPreferenceSaving}
+                      onClick={() => void changeAutomaticSync(!autoSyncEnabled)}
+                      type="button"
+                    >
+                      {autoSyncPreferenceSaving
+                        ? 'Guardando preferencia…'
+                        : autoSyncEnabled
+                          ? 'Desactivar sincronización automática'
+                          : 'Activar sincronización automática'}
+                    </button>
+                  </div>
+                </details>
+              </>
+            )}
+            <button
+              className="shrink-0 rounded-lg border border-slate-600 px-3 py-2 text-xs font-medium text-slate-200 transition hover:bg-white/10 sm:text-sm"
+              onClick={() => {
+                setSignOutError('')
+                void onSignOut().catch(() =>
+                  setSignOutError('No se pudo cerrar la sesión. Inténtalo de nuevo.'),
+                )
+              }}
+              type="button"
+            >
+              Cerrar sesión
+            </button>
+          </div>
         </header>
 
         {signOutError && (
@@ -2616,183 +2695,131 @@ function TournamentWorkspace({
           </div>
         )}
 
-        {!adminMode && <section
-          aria-labelledby="sync-heading"
-          className="mb-6 rounded-2xl border border-white/10 bg-slate-900/80 px-4 py-3 shadow-lg shadow-black/10 sm:px-5"
-        >
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex flex-wrap items-center gap-3">
-              <h2 id="sync-heading">Sincronización</h2>
-              <p
-                aria-live="polite"
-                className={`app-supporting-copy inline-flex rounded-full border px-3 py-1 text-sm font-medium ${
-                  displayedSyncStatus === 'error'
-                    ? 'border-rose-400/40 bg-rose-400/10 text-rose-200'
-                    : displayedSyncStatus === 'synced'
-                      ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200'
-                      : displayedSyncStatus === 'syncing'
-                        ? 'border-sky-400/40 bg-sky-400/10 text-sky-200'
-                        : 'border-amber-300/30 bg-amber-300/10 text-amber-100'
-                }`}
-                role="status"
-              >
-                {displayedSyncStatus === 'syncing' && 'Sincronizando…'}
-                {displayedSyncStatus === 'synced' && 'Sincronizado'}
-                {displayedSyncStatus === 'pending' && 'Cambios pendientes'}
-                {displayedSyncStatus === 'error' && 'Error de sincronización'}
-              </p>
-            </div>
-            <button
-              className="w-full rounded-lg border border-amber-300/50 px-4 py-3 font-semibold text-amber-200 transition hover:bg-amber-300/10 disabled:cursor-wait disabled:opacity-50 sm:w-auto"
-              disabled={
-                isDeletingTournament ||
-                syncStatus === 'syncing' ||
-                syncReview !== null
-              }
-              onClick={() => void beginSync()}
-              type="button"
+        {!adminMode &&
+          Boolean(
+            autoSyncPreferenceError ||
+              syncError ||
+              (syncReview !== null && syncReview.conflicts.length > 0),
+          ) && (
+            <section
+              aria-labelledby="sync-issues-heading"
+              className="mb-6 rounded-2xl border border-white/10 bg-slate-900/80 p-4 shadow-lg shadow-black/10 sm:p-5"
             >
-              Sincronizar con Supabase
-            </button>
-          </div>
-
-          <details className="mt-2 border-t border-white/10 pt-1">
-            <summary className="cursor-pointer py-2 text-sm font-medium text-slate-300 hover:text-white">
-              Preferencias de sincronización
-            </summary>
-            <div className="flex flex-col gap-3 pb-2 sm:flex-row sm:items-center sm:justify-between">
-              <p className="app-supporting-copy text-sm text-slate-400">
-                {autoSyncEnabled
-                  ? 'La sincronización automática está activada para esta cuenta.'
-                  : 'La sincronización automática solo empieza si la activas.'}
-              </p>
-              <button
-                aria-pressed={autoSyncEnabled}
-                className="rounded-lg border border-amber-300/40 px-4 py-2.5 text-sm font-semibold text-amber-200 transition hover:bg-amber-300/10 disabled:cursor-wait disabled:opacity-50"
-                disabled={autoSyncPreferenceSaving}
-                onClick={() => void changeAutomaticSync(!autoSyncEnabled)}
-                type="button"
-              >
-                {autoSyncPreferenceSaving
-                  ? 'Guardando preferencia…'
-                  : autoSyncEnabled
-                    ? 'Desactivar sincronización automática'
-                    : 'Activar sincronización automática'}
-              </button>
-            </div>
-          </details>
-
-          {autoSyncPreferenceError && (
-            <p
-              className="mt-3 rounded-lg border border-rose-400/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-200"
-              role="alert"
-            >
-              {autoSyncPreferenceError}
-            </p>
-          )}
-
-          {syncError && (
-            <p
-              className="mt-4 rounded-lg border border-rose-400/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-200"
-              role="alert"
-            >
-              {syncError}
-            </p>
-          )}
-
-          {syncReview && syncReview.conflicts.length > 0 && (
-            <div className="mt-5 space-y-4 border-t border-white/10 pt-5">
-              <div>
-                <h3 className="text-base font-semibold text-slate-100">
-                  Resuelve los conflictos
-                </h3>
-                <p className="app-supporting-copy text-sm text-slate-300">
-                  {syncReview.automatic
-                    ? 'La sincronización automática está pausada. Elige qué versión conservar para cada torneo; la sincronización continuará al resolverlos todos.'
-                    : 'Elige qué versión conservar para cada torneo. La sincronización comenzará al resolverlos todos.'}
-                  {' '}No se sobrescribirá ninguna versión antes de terminar
-                  esta revisión.
-                </p>
-                <div className="mt-4 space-y-3">
-                  {syncReview.conflicts.map((conflict, index) => (
-                    <fieldset
-                      className="rounded-xl border border-amber-300/25 bg-slate-950/60 p-4 shadow-sm shadow-black/20"
-                      key={conflict.id}
-                    >
-                      <legend className="px-1 text-sm font-semibold text-amber-100">
-                        Conflicto {index + 1}: {conflict.local.name}
-                      </legend>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        {(
-                          [
-                            ['local', 'Usar versión local', conflict.local],
-                            [
-                              'remote',
-                              'Usar versión de Supabase',
-                              conflict.remote,
-                            ],
-                          ] as const
-                        ).map(([choice, label, tournament]) => (
-                          <label
-                            className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm transition-colors ${
-                              conflict.choice === choice
-                                ? 'border-amber-300/60 bg-amber-300/10 text-amber-100'
-                                : 'border-slate-700 text-slate-300 hover:border-slate-500'
-                            }`}
-                            key={choice}
-                          >
-                            <input
-                              checked={conflict.choice === choice}
-                              className="mt-0.5 accent-amber-300"
-                              name={`conflict-${conflict.id}`}
-                              onChange={() =>
-                                chooseConflict(conflict.id, choice)
-                              }
-                              type="radio"
-                            />
-                            <span className="min-w-0">
-                              <span className="block font-medium">
-                                {label}
-                              </span>
-                              <span className="mt-1 block text-xs text-slate-300">
-                                {tournament.players.length}{' '}
-                                {tournament.players.length === 1
-                                  ? tournament.format === 'two-headed-giant'
-                                    ? 'pareja'
-                                    : 'jugador'
-                                  : tournament.format === 'two-headed-giant'
-                                    ? 'parejas'
-                                    : 'jugadores'}
-                                {' · '}
-                                {tournament.rounds.length}{' '}
-                                {tournament.rounds.length === 1
-                                  ? 'ronda'
-                                  : 'rondas'}
-                              </span>
-                            </span>
-                          </label>
-                        ))}
-                      </div>
-                    </fieldset>
-                  ))}
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-950/50 p-4">
-                <p className="text-sm text-slate-300">
-                  Al elegir una versión para cada conflicto, empezará la
-                  sincronización.
-                </p>
-                <button
-                  className="rounded-lg border border-slate-600 px-4 py-2.5 text-sm font-medium text-slate-200 transition hover:bg-white/10 disabled:cursor-wait disabled:opacity-50"
-                  onClick={cancelSyncReview}
-                  type="button"
+              <h2 className="sr-only" id="sync-issues-heading">
+                Avisos de sincronización
+              </h2>
+              {autoSyncPreferenceError && (
+                <p
+                  className="rounded-lg border border-rose-400/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-200"
+                  role="alert"
                 >
-                  Cancelar revisión
-                </button>
-              </div>
-            </div>
+                  {autoSyncPreferenceError}
+                </p>
+              )}
+
+              {syncError && (
+                <p
+                  className="rounded-lg border border-rose-400/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-200"
+                  role="alert"
+                >
+                  {syncError}
+                </p>
+              )}
+
+              {syncReview && syncReview.conflicts.length > 0 && (
+                <div className="mt-5 space-y-4 border-t border-white/10 pt-5">
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-100">
+                      Resuelve los conflictos
+                    </h3>
+                    <p className="app-supporting-copy text-sm text-slate-300">
+                      {syncReview.automatic
+                        ? 'La sincronización automática está pausada. Elige qué versión conservar para cada torneo; la sincronización continuará al resolverlos todos.'
+                        : 'Elige qué versión conservar para cada torneo. La sincronización comenzará al resolverlos todos.'}
+                      {' '}No se sobrescribirá ninguna versión antes de terminar
+                      esta revisión.
+                    </p>
+                    <div className="mt-4 space-y-3">
+                      {syncReview.conflicts.map((conflict, index) => (
+                        <fieldset
+                          className="rounded-xl border border-amber-300/25 bg-slate-950/60 p-4 shadow-sm shadow-black/20"
+                          key={conflict.id}
+                        >
+                          <legend className="px-1 text-sm font-semibold text-amber-100">
+                            Conflicto {index + 1}: {conflict.local.name}
+                          </legend>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            {(
+                              [
+                                ['local', 'Usar versión local', conflict.local],
+                                [
+                                  'remote',
+                                  'Usar versión de Supabase',
+                                  conflict.remote,
+                                ],
+                              ] as const
+                            ).map(([choice, label, tournament]) => (
+                              <label
+                                className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm transition-colors ${
+                                  conflict.choice === choice
+                                    ? 'border-amber-300/60 bg-amber-300/10 text-amber-100'
+                                    : 'border-slate-700 text-slate-300 hover:border-slate-500'
+                                }`}
+                                key={choice}
+                              >
+                                <input
+                                  checked={conflict.choice === choice}
+                                  className="mt-0.5 accent-amber-300"
+                                  name={`conflict-${conflict.id}`}
+                                  onChange={() =>
+                                    chooseConflict(conflict.id, choice)
+                                  }
+                                  type="radio"
+                                />
+                                <span className="min-w-0">
+                                  <span className="block font-medium">
+                                    {label}
+                                  </span>
+                                  <span className="mt-1 block text-xs text-slate-300">
+                                    {tournament.players.length}{' '}
+                                    {tournament.players.length === 1
+                                      ? tournament.format === 'two-headed-giant'
+                                        ? 'pareja'
+                                        : 'jugador'
+                                      : tournament.format === 'two-headed-giant'
+                                        ? 'parejas'
+                                        : 'jugadores'}
+                                    {' · '}
+                                    {tournament.rounds.length}{' '}
+                                    {tournament.rounds.length === 1
+                                      ? 'ronda'
+                                      : 'rondas'}
+                                  </span>
+                                </span>
+                              </label>
+                            ))}
+                          </div>
+                        </fieldset>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-950/50 p-4">
+                    <p className="text-sm text-slate-300">
+                      Al elegir una versión para cada conflicto, empezará la
+                      sincronización.
+                    </p>
+                    <button
+                      className="rounded-lg border border-slate-600 px-4 py-2.5 text-sm font-medium text-slate-200 transition hover:bg-white/10 disabled:cursor-wait disabled:opacity-50"
+                      onClick={cancelSyncReview}
+                      type="button"
+                    >
+                      Cancelar revisión
+                    </button>
+                  </div>
+                </div>
+              )}
+            </section>
           )}
-        </section>}
 
         <div className="grid gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:gap-8">
           <section
