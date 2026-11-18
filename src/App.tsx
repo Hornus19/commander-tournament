@@ -181,7 +181,12 @@ function sameRemoteRecords(
 }
 
 type AuthState = {
-  status: 'loading' | 'signed-out' | 'signed-in' | 'error'
+  status:
+    | 'loading'
+    | 'signed-out'
+    | 'signed-in'
+    | 'password-recovery'
+    | 'error'
   session: Session | null
   client: SupabaseClient | null
   error: string
@@ -363,6 +368,13 @@ function getAuthErrorMessage(error: unknown) {
   }
 
   const message = String(error.message).toLowerCase()
+  if (
+    message.includes('otp_expired') ||
+    message.includes('expired') ||
+    message.includes('invalid token')
+  ) {
+    return 'El enlace de recuperación no es válido o ha caducado. Solicita uno nuevo desde la pantalla de acceso.'
+  }
   if (message.includes('invalid login credentials')) {
     return 'El correo o la contraseña no son correctos.'
   }
@@ -384,19 +396,42 @@ function getAuthErrorMessage(error: unknown) {
   return 'No se pudo completar la solicitud. Comprueba los datos e inténtalo de nuevo.'
 }
 
+function clearPasswordRecoveryRedirect() {
+  const url = new URL(window.location.href)
+  url.searchParams.delete('password-recovery')
+  url.hash = ''
+  window.history.replaceState(
+    {},
+    document.title,
+    `${url.pathname}${url.search}`,
+  )
+}
+
+type AuthScreenMode =
+  | 'sign-in'
+  | 'sign-up'
+  | 'forgot-password'
+  | 'update-password'
+
 function AuthScreen({
   client,
   initialError,
+  initialMode = 'sign-in',
+  onRecoveryComplete,
 }: {
   client: SupabaseClient | null
   initialError: string
+  initialMode?: AuthScreenMode
+  onRecoveryComplete?: () => void
 }) {
-  const [mode, setMode] = useState<'sign-in' | 'sign-up'>('sign-in')
+  const [mode, setMode] = useState<AuthScreenMode>(initialMode)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(initialError)
   const [notice, setNotice] = useState('')
+  const [passwordUpdated, setPasswordUpdated] = useState(false)
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -408,7 +443,37 @@ function AuthScreen({
     setError('')
     setNotice('')
     try {
-      if (mode === 'sign-up') {
+      if (mode === 'forgot-password') {
+        const redirectTo = new URL('/', window.location.origin)
+        redirectTo.searchParams.set('password-recovery', '1')
+        const { error: recoveryError } = await client.auth.resetPasswordForEmail(
+          email.trim(),
+          { redirectTo: redirectTo.toString() },
+        )
+        if (recoveryError) {
+          setError(getAuthErrorMessage(recoveryError))
+        } else {
+          setNotice(
+            'Si existe una cuenta con ese correo, recibirá un enlace para restablecer la contraseña. Revisa también la carpeta de spam.',
+          )
+        }
+      } else if (mode === 'update-password') {
+        if (password !== confirmPassword) {
+          setError('Las contraseñas no coinciden.')
+          return
+        }
+        const { error: updateError } = await client.auth.updateUser({
+          password,
+        })
+        if (updateError) {
+          setError(getAuthErrorMessage(updateError))
+        } else {
+          setPassword('')
+          setConfirmPassword('')
+          setPasswordUpdated(true)
+          setNotice('La contraseña se ha actualizado correctamente.')
+        }
+      } else if (mode === 'sign-up') {
         const { data, error: signUpError } = await client.auth.signUp({
           email: email.trim(),
           password,
@@ -433,6 +498,7 @@ function AuthScreen({
       setError(getAuthErrorMessage(requestError))
     } finally {
       setPassword('')
+      setConfirmPassword('')
       setBusy(false)
     }
   }
@@ -442,6 +508,17 @@ function AuthScreen({
     setError('')
     setNotice('')
     setPassword('')
+    setConfirmPassword('')
+    setPasswordUpdated(false)
+  }
+
+  function changeRecoveryMode(nextMode: 'sign-in' | 'forgot-password') {
+    setMode(nextMode)
+    setError('')
+    setNotice('')
+    setPassword('')
+    setConfirmPassword('')
+    setPasswordUpdated(false)
   }
 
   return (
@@ -462,12 +539,22 @@ function AuthScreen({
           </p>
         </div>
         <h1 className="mb-2!" id="auth-heading">
-          {mode === 'sign-in' ? 'Iniciar sesión' : 'Crear cuenta'}
+          {mode === 'sign-in'
+            ? 'Iniciar sesión'
+            : mode === 'sign-up'
+              ? 'Crear cuenta'
+              : mode === 'forgot-password'
+                ? 'Recuperar contraseña'
+                : 'Nueva contraseña'}
         </h1>
         <p className="app-supporting-copy mb-6! text-sm text-slate-400">
           {mode === 'sign-in'
             ? 'Accede para ver y gestionar tus torneos.'
-            : 'Crea una cuenta para empezar a organizar tus torneos.'}
+            : mode === 'sign-up'
+              ? 'Crea una cuenta para empezar a organizar tus torneos.'
+              : mode === 'forgot-password'
+                ? 'Escribe el correo de tu cuenta y te enviaremos un enlace de recuperación.'
+                : 'Elige una contraseña nueva para volver a acceder a tu cuenta.'}
         </p>
 
         {error && (
@@ -487,70 +574,143 @@ function AuthScreen({
           </p>
         )}
 
-        <form className="space-y-5" onSubmit={submit}>
-          <div>
-            <label
-              className="mb-2 block text-sm font-medium text-slate-200"
-              htmlFor="auth-email"
-            >
-              Correo electrónico
-            </label>
-            <input
-              autoComplete="email"
-              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-base text-white"
-              disabled={!client || busy}
-              id="auth-email"
-              onChange={(event) => setEmail(event.target.value)}
-              required
-              type="email"
-              value={email}
-            />
-          </div>
-          <div>
-            <label
-              className="mb-2 block text-sm font-medium text-slate-200"
-              htmlFor="auth-password"
-            >
-              Contraseña
-            </label>
-            <input
-              autoComplete={
-                mode === 'sign-up' ? 'new-password' : 'current-password'
-              }
-              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-base text-white"
-              disabled={!client || busy}
-              id="auth-password"
-              onChange={(event) => setPassword(event.target.value)}
-              required
-              type="password"
-              value={password}
-            />
-          </div>
+        {mode === 'update-password' && passwordUpdated ? (
           <button
-            className="w-full rounded-lg bg-amber-300 px-5 py-3 font-semibold text-slate-950 transition hover:bg-amber-200 disabled:cursor-wait disabled:opacity-60"
-            disabled={!client || busy}
-            type="submit"
-          >
-            {busy
-              ? 'Un momento…'
-              : mode === 'sign-in'
-                ? 'Iniciar sesión'
-                : 'Crear cuenta'}
-          </button>
-        </form>
-
-        <p className="mt-6 text-center text-sm text-slate-400">
-          {mode === 'sign-in' ? '¿No tienes cuenta?' : '¿Ya tienes cuenta?'}{' '}
-          <button
-            className="rounded font-semibold text-amber-200 underline decoration-amber-200/50 underline-offset-4 hover:text-amber-100"
-            onClick={() =>
-              changeMode(mode === 'sign-in' ? 'sign-up' : 'sign-in')
-            }
+            className="w-full rounded-lg bg-amber-300 px-5 py-3 font-semibold text-slate-950 transition hover:bg-amber-200"
+            onClick={onRecoveryComplete}
             type="button"
           >
-            {mode === 'sign-in' ? 'Crear cuenta' : 'Iniciar sesión'}
+            Continuar a la aplicación
           </button>
-        </p>
+        ) : (
+          <form className="space-y-5" onSubmit={submit}>
+            {mode !== 'update-password' && (
+              <div>
+                <label
+                  className="mb-2 block text-sm font-medium text-slate-200"
+                  htmlFor="auth-email"
+                >
+                  Correo electrónico
+                </label>
+                <input
+                  autoComplete="email"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-base text-white"
+                  disabled={!client || busy}
+                  id="auth-email"
+                  onChange={(event) => setEmail(event.target.value)}
+                  required
+                  type="email"
+                  value={email}
+                />
+              </div>
+            )}
+            {mode !== 'forgot-password' && (
+              <div>
+                <label
+                  className="mb-2 block text-sm font-medium text-slate-200"
+                  htmlFor="auth-password"
+                >
+                  {mode === 'update-password'
+                    ? 'Nueva contraseña'
+                    : 'Contraseña'}
+                </label>
+                <input
+                  autoComplete={
+                    mode === 'sign-up' || mode === 'update-password'
+                      ? 'new-password'
+                      : 'current-password'
+                  }
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-base text-white"
+                  disabled={!client || busy}
+                  id="auth-password"
+                  onChange={(event) => setPassword(event.target.value)}
+                  required
+                  type="password"
+                  value={password}
+                />
+              </div>
+            )}
+            {mode === 'update-password' && (
+              <div>
+                <label
+                  className="mb-2 block text-sm font-medium text-slate-200"
+                  htmlFor="auth-confirm-password"
+                >
+                  Repite la nueva contraseña
+                </label>
+                <input
+                  autoComplete="new-password"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-base text-white"
+                  disabled={!client || busy}
+                  id="auth-confirm-password"
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  required
+                  type="password"
+                  value={confirmPassword}
+                />
+              </div>
+            )}
+            <button
+              className="w-full rounded-lg bg-amber-300 px-5 py-3 font-semibold text-slate-950 transition hover:bg-amber-200 disabled:cursor-wait disabled:opacity-60"
+              disabled={!client || busy}
+              type="submit"
+            >
+              {busy
+                ? 'Un momento…'
+                : mode === 'sign-in'
+                  ? 'Iniciar sesión'
+                  : mode === 'sign-up'
+                    ? 'Crear cuenta'
+                    : mode === 'forgot-password'
+                      ? 'Enviar enlace'
+                      : 'Guardar nueva contraseña'}
+            </button>
+          </form>
+        )}
+
+        {mode === 'sign-in' && (
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-sm">
+            <button
+              className="rounded font-semibold text-amber-200 underline decoration-amber-200/50 underline-offset-4 hover:text-amber-100"
+              onClick={() => changeRecoveryMode('forgot-password')}
+              type="button"
+            >
+              ¿Olvidaste tu contraseña?
+            </button>
+            <span className="text-slate-400">¿No tienes cuenta?</span>
+            <button
+              className="rounded font-semibold text-amber-200 underline decoration-amber-200/50 underline-offset-4 hover:text-amber-100"
+              onClick={() => changeMode('sign-up')}
+              type="button"
+            >
+              Crear cuenta
+            </button>
+          </div>
+        )}
+        {mode === 'sign-up' && (
+          <p className="mt-6 text-center text-sm text-slate-400">
+            ¿Ya tienes cuenta?{' '}
+            <button
+              className="rounded font-semibold text-amber-200 underline decoration-amber-200/50 underline-offset-4 hover:text-amber-100"
+              onClick={() => changeMode('sign-in')}
+              type="button"
+            >
+              Iniciar sesión
+            </button>
+          </p>
+        )}
+        {mode === 'forgot-password' && (
+          <p className="mt-6 text-center text-sm text-slate-400">
+            ¿Ya recordaste la contraseña?{' '}
+            <button
+              className="rounded font-semibold text-amber-200 underline decoration-amber-200/50 underline-offset-4 hover:text-amber-100"
+              onClick={() => changeRecoveryMode('sign-in')}
+              type="button"
+            >
+              Volver a iniciar sesión
+            </button>
+          </p>
+        )}
       </section>
     </main>
   )
@@ -3639,6 +3799,13 @@ function AuthenticatedApp() {
     userId: string
     tournaments: Tournament[]
   } | null>(null)
+  const recoveryLinkRequested = useRef(
+    new URLSearchParams(window.location.search).get('password-recovery') ===
+      '1' ||
+      new URLSearchParams(window.location.hash.slice(1)).get('type') ===
+        'recovery',
+  )
+  const passwordRecoveryActive = useRef(false)
   const client = authState.client
 
   useEffect(() => {
@@ -3650,9 +3817,49 @@ function AuthenticatedApp() {
 
     const {
       data: { subscription },
-    } = client.auth.onAuthStateChange((_event, session) => {
+    } = client.auth.onAuthStateChange((event, session) => {
+      if (
+        event === 'INITIAL_SESSION' &&
+        recoveryLinkRequested.current &&
+        !session
+      ) {
+        return
+      }
       authEventReceived = true
       if (active) {
+        if (
+          event === 'PASSWORD_RECOVERY' ||
+          (recoveryLinkRequested.current && session)
+        ) {
+          passwordRecoveryActive.current = true
+        }
+
+        if (event === 'SIGNED_OUT') {
+          passwordRecoveryActive.current = false
+        }
+
+        if (passwordRecoveryActive.current) {
+          if (session) {
+            setWorkspace(null)
+            setAuthState({
+              status: 'password-recovery',
+              session,
+              client,
+              error: '',
+            })
+          } else {
+            setWorkspace(null)
+            setAuthState({
+              status: 'signed-out',
+              session: null,
+              client,
+              error:
+                'El enlace de recuperación no es válido o ha caducado. Solicita uno nuevo desde la pantalla de acceso.',
+            })
+          }
+          return
+        }
+
         setWorkspace(
           session
             ? {
@@ -3665,7 +3872,10 @@ function AuthenticatedApp() {
           status: session ? 'signed-in' : 'signed-out',
           session,
           client,
-          error: '',
+          error:
+            !session && recoveryLinkRequested.current
+              ? 'El enlace de recuperación no es válido o ha caducado. Solicita uno nuevo desde la pantalla de acceso.'
+              : '',
         })
       }
     })
@@ -3686,11 +3896,24 @@ function AuthenticatedApp() {
             : null,
         )
         setAuthState({
-          status: error ? 'error' : data.session ? 'signed-in' : 'signed-out',
+          status: error
+            ? 'error'
+            : data.session
+              ? recoveryLinkRequested.current
+                ? 'password-recovery'
+                : 'signed-in'
+              : 'signed-out',
           session: error ? null : data.session,
           client,
-          error: error ? getAuthErrorMessage(error) : '',
+          error: error
+            ? getAuthErrorMessage(error)
+            : !data.session && recoveryLinkRequested.current
+              ? 'El enlace de recuperación no es válido o ha caducado. Solicita uno nuevo desde la pantalla de acceso.'
+              : '',
         })
+        if (data.session && recoveryLinkRequested.current) {
+          passwordRecoveryActive.current = true
+        }
       })
       .catch((error: unknown) => {
         if (active && !authEventReceived) {
@@ -3713,6 +3936,27 @@ function AuthenticatedApp() {
   const userId =
     authState.status === 'signed-in' ? authState.session?.user.id : undefined
 
+  function continueAfterPasswordRecovery() {
+    const session = authState.session
+    if (!session || !client) {
+      return
+    }
+
+    passwordRecoveryActive.current = false
+    recoveryLinkRequested.current = false
+    clearPasswordRecoveryRedirect()
+    setWorkspace({
+      userId: session.user.id,
+      tournaments: migrateLegacyTournaments(session.user.id),
+    })
+    setAuthState({
+      status: 'signed-in',
+      session,
+      client,
+      error: '',
+    })
+  }
+
   if (authState.status === 'loading') {
     return (
       <main
@@ -3722,6 +3966,17 @@ function AuthenticatedApp() {
       >
         <p className="text-slate-200">Comprobando tu sesión…</p>
       </main>
+    )
+  }
+
+  if (authState.status === 'password-recovery' && client) {
+    return (
+      <AuthScreen
+        client={client}
+        initialError={authState.error}
+        initialMode="update-password"
+        onRecoveryComplete={continueAfterPasswordRecovery}
+      />
     )
   }
 
