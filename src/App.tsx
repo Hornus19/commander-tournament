@@ -1153,6 +1153,9 @@ function TournamentWorkspace({
   const selectedTournament =
     tournaments.find(({ id }) => id === selectedTournamentId) ?? null
   const tournamentIsClosed = Boolean(selectedTournament?.closedAt)
+  const registrationClosed = Boolean(
+    selectedTournament && selectedTournament.rounds.length > 0,
+  )
   const participantLabel =
     selectedTournament?.format === 'two-headed-giant' ? 'pareja' : 'jugador'
   const participantsLabel =
@@ -1837,7 +1840,18 @@ function TournamentWorkspace({
     event.preventDefault()
     const name = playerName.trim()
 
-    if (!selectedTournament || selectedTournament.closedAt || !name) {
+    if (!selectedTournament) {
+      return
+    }
+
+    if (selectedTournament.rounds.length > 0) {
+      setPlayerError(
+        'La inscripción se cerró al iniciar la primera ronda. No se pueden añadir más participantes.',
+      )
+      return
+    }
+
+    if (selectedTournament.closedAt || !name) {
       setPlayerError(`Escribe el nombre de la ${participantLabel}.`)
       return
     }
@@ -3129,6 +3143,16 @@ function TournamentWorkspace({
                   />
                 </Suspense>
 
+                {registrationClosed && (
+                  <p
+                    className="mb-3 rounded-lg border border-amber-300/20 bg-amber-300/5 px-4 py-3 text-sm text-amber-100"
+                    role="status"
+                  >
+                    La inscripción se cerró al iniciar la primera ronda. Ya no
+                    se pueden añadir participantes.
+                  </p>
+                )}
+
                 <form
                   className="mb-6 flex flex-col gap-3 sm:flex-row"
                   onSubmit={addPlayer}
@@ -3140,7 +3164,7 @@ function TournamentWorkspace({
                     <input
                       autoComplete="off"
                       className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-base text-white placeholder:text-slate-500"
-                      disabled={tournamentIsClosed}
+                      disabled={tournamentIsClosed || registrationClosed}
                       id="player-name"
                       onChange={(event) => {
                         setPlayerName(event.target.value)
@@ -3154,7 +3178,7 @@ function TournamentWorkspace({
                   </div>
                   <button
                     className="rounded-lg border border-amber-300/50 px-5 py-3 font-semibold text-amber-200 transition hover:bg-amber-300/10"
-                    disabled={adminSaving || tournamentIsClosed}
+                    disabled={adminSaving || tournamentIsClosed || registrationClosed}
                     type="submit"
                   >
                     Añadir {participantLabel}
