@@ -93,6 +93,37 @@ function getSyncErrorMessage(error: unknown) {
   return 'No se pudieron sincronizar los torneos. Tus datos locales se conservaron.'
 }
 
+function downloadTournamentBackup(tournament: Tournament) {
+  const exportedAt = new Date()
+  const safeTournamentName =
+    tournament.name
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .toLowerCase() || 'torneo'
+  const backup = {
+    app: 'Commander Tournament',
+    backupVersion: 1,
+    exportedAt: exportedAt.toISOString(),
+    tournament,
+  }
+  const blob = new Blob([`${JSON.stringify(backup, null, 2)}\n`], {
+    type: 'application/json;charset=utf-8',
+  })
+  const downloadUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = downloadUrl
+  link.download = `${safeTournamentName}-copia-${exportedAt
+    .toISOString()
+    .slice(0, 10)}.json`
+  link.hidden = true
+  document.body.append(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000)
+}
+
 function sameTournamentList(first: Tournament[], second: Tournament[]) {
   if (first.length !== second.length) {
     return false
@@ -1026,6 +1057,16 @@ function TournamentWorkspace({
   const [selectedTournamentId, setSelectedTournamentId] = useState<
     string | null
   >(() => tournaments[0]?.id ?? null)
+  const [expandedRoundId, setExpandedRoundId] = useState<string | null>(() => {
+    const firstTournament = initialTournaments[0]
+    return (
+      firstTournament?.rounds.find(
+        ({ id }) => id === firstTournament.activeRoundId,
+      )?.id ??
+      firstTournament?.rounds[firstTournament.rounds.length - 1]?.id ??
+      null
+    )
+  })
   const [tournamentName, setTournamentName] = useState('')
   const [tournamentFormat, setTournamentFormat] =
     useState<TournamentFormat>('commander')
@@ -1053,6 +1094,8 @@ function TournamentWorkspace({
   const [roundGenerationError, setRoundGenerationError] = useState('')
   const [tournamentStatusError, setTournamentStatusError] = useState('')
   const [tournamentStatusNotice, setTournamentStatusNotice] = useState('')
+  const [backupNotice, setBackupNotice] = useState('')
+  const [backupError, setBackupError] = useState('')
   const [signOutError, setSignOutError] = useState('')
   const [syncStatus, setSyncStatus] = useState<
     'pending' | 'syncing' | 'synced' | 'error'
@@ -1092,6 +1135,7 @@ function TournamentWorkspace({
     [],
   )
   const adminSaveLock = useRef(false)
+  const pendingRoundScrollId = useRef<string | null>(null)
   const latestTournaments = useRef(tournaments)
   const autoSyncEnabledRef = useRef(initialAutoSyncEnabled)
   const syncInProgressRef = useRef(false)
@@ -1188,6 +1232,20 @@ function TournamentWorkspace({
           selectedTournament.rounds.length,
         )
       : null
+
+  useEffect(() => {
+    const roundId = pendingRoundScrollId.current
+    if (!roundId || roundId !== expandedRoundId) {
+      return
+    }
+    const roundElement = document.getElementById(`round-${roundId}-section`)
+    if (!roundElement) {
+      return
+    }
+
+    pendingRoundScrollId.current = null
+    roundElement.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [expandedRoundId, selectedTournament?.rounds.length, selectedTournamentId])
 
   useEffect(() => {
     if (!adminMode) {
@@ -1765,6 +1823,8 @@ function TournamentWorkspace({
     } else {
       setTournaments((current) => [...current, tournament])
     }
+    pendingRoundScrollId.current = null
+    setExpandedRoundId(null)
     setSelectedTournamentId(tournament.id)
     setTournamentName('')
     setTournamentFormat('commander')
@@ -1975,6 +2035,20 @@ function TournamentWorkspace({
     }
   }
 
+  function createSelectedTournamentBackup() {
+    if (!selectedTournament) {
+      return
+    }
+    setBackupNotice('')
+    setBackupError('')
+    try {
+      downloadTournamentBackup(selectedTournament)
+      setBackupNotice('Copia de seguridad descargada.')
+    } catch {
+      setBackupError('No se pudo descargar la copia de seguridad.')
+    }
+  }
+
   async function createRound() {
     if (!selectedTournament || selectedTournament.closedAt) {
       return
@@ -1989,6 +2063,9 @@ function TournamentWorkspace({
     }
 
     const roundId = crypto.randomUUID()
+    const previousExpandedRoundId = expandedRoundId
+    pendingRoundScrollId.current = roundId
+    setExpandedRoundId(roundId)
     const saved = await updateSelectedTournament((tournament) => ({
       ...tournament,
       activeRoundId: roundId,
@@ -1996,6 +2073,9 @@ function TournamentWorkspace({
     }))
     if (saved) {
       setRoundGenerationError('')
+    } else {
+      pendingRoundScrollId.current = null
+      setExpandedRoundId(previousExpandedRoundId)
     }
   }
 
@@ -2090,6 +2170,11 @@ function TournamentWorkspace({
       playerIds: group,
     }))
     const generatedRoundId = roundId ?? crypto.randomUUID()
+    const previousExpandedRoundId = expandedRoundId
+    if (roundId === null) {
+      pendingRoundScrollId.current = generatedRoundId
+      setExpandedRoundId(generatedRoundId)
+    }
 
     const saved = await updateSelectedTournament((tournament) => ({
       ...tournament,
@@ -2102,7 +2187,11 @@ function TournamentWorkspace({
             ),
     }))
     if (saved) {
+      setExpandedRoundId(generatedRoundId)
       setRoundGenerationError('')
+    } else if (roundId === null) {
+      pendingRoundScrollId.current = null
+      setExpandedRoundId(previousExpandedRoundId)
     }
   }
 
@@ -2760,9 +2849,19 @@ function TournamentWorkspace({
                             ? 'border-amber-300/60 bg-amber-300/10 text-amber-100'
                             : 'border-slate-800 bg-slate-950/60 text-slate-200 hover:border-slate-600'
                         }`}
-                        onClick={() =>
+                        onClick={() => {
+                          pendingRoundScrollId.current = null
                           setSelectedTournamentId(tournament.id)
-                        }
+                          setExpandedRoundId(
+                            tournament.rounds.find(
+                              ({ id }) => id === tournament.activeRoundId,
+                            )?.id ??
+                              tournament.rounds[
+                                tournament.rounds.length - 1
+                              ]?.id ??
+                              null,
+                          )
+                        }}
                         type="button"
                       >
                         <span className="block font-medium">
@@ -2967,7 +3066,32 @@ function TournamentWorkspace({
                           Cerrar torneo
                         </button>
                       )}
+                      <button
+                        aria-describedby="tournament-backup-help"
+                        className="rounded-lg border border-slate-600 px-4 py-2.5 text-sm font-semibold text-slate-200 transition hover:bg-white/10 disabled:cursor-wait disabled:opacity-50"
+                        disabled={adminSaving}
+                        onClick={createSelectedTournamentBackup}
+                        type="button"
+                      >
+                        Descargar copia de seguridad
+                      </button>
                     </div>
+                    <p
+                      className="app-supporting-copy text-sm text-slate-400"
+                      id="tournament-backup-help"
+                    >
+                      Incluye participantes, rondas, mesas y resultados oficiales. No incluye el enlace QR ni resultados pendientes de aprobación.
+                    </p>
+                    {backupNotice && (
+                      <p className="text-sm text-emerald-200" role="status">
+                        {backupNotice}
+                      </p>
+                    )}
+                    {backupError && (
+                      <p className="text-sm text-rose-200" role="alert">
+                        {backupError}
+                      </p>
+                    )}
                     {tournamentIsClosed && (
                       <p className="rounded-lg border border-emerald-300/20 bg-emerald-300/5 px-4 py-3 text-sm text-emerald-100">
                         Torneo finalizado. El QR muestra la clasificación y las
@@ -3493,6 +3617,7 @@ function TournamentWorkspace({
                   ) : (
                     <div className="space-y-5">
                       {selectedTournament.rounds.map((round, roundIndex) => {
+                        const isRoundExpanded = expandedRoundId === round.id
                         const assignedPlayerIds = new Set(
                           round.pods.flatMap((pod) => pod.playerIds),
                         )
@@ -3502,17 +3627,53 @@ function TournamentWorkspace({
                         return (
                           <section
                             aria-labelledby={`round-${round.id}-heading`}
-                            className="rounded-xl border border-slate-700/80 bg-slate-950/40 p-4 sm:p-5"
+                            className="scroll-mt-5 rounded-xl border border-slate-700/80 bg-slate-950/40 p-4 sm:p-5"
+                            id={`round-${round.id}-section`}
                             key={round.id}
                           >
-                            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
                               <h3
                                 className="text-base font-semibold text-slate-100"
                                 id={`round-${round.id}-heading`}
                               >
-                                Ronda {roundIndex + 1}
+                                <button
+                                  aria-controls={`round-${round.id}-content`}
+                                  aria-expanded={isRoundExpanded}
+                                  className="flex flex-wrap items-center gap-3 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+                                  onClick={() => {
+                                    pendingRoundScrollId.current = null
+                                    setExpandedRoundId(
+                                      isRoundExpanded ? null : round.id,
+                                    )
+                                  }}
+                                  type="button"
+                                >
+                                  <span>Ronda {roundIndex + 1}</span>
+                                  <span className="text-sm font-normal text-slate-400">
+                                    {round.pods.length}{' '}
+                                    {round.pods.length === 1 ? 'mesa' : 'mesas'}
+                                  </span>
+                                  {selectedTournament.activeRoundId ===
+                                    round.id && (
+                                    <span className="rounded-full border border-emerald-300/30 px-2 py-0.5 text-xs font-medium text-emerald-200">
+                                      En QR
+                                    </span>
+                                  )}
+                                  <span
+                                    aria-hidden="true"
+                                    className="text-sm text-amber-200"
+                                  >
+                                    {isRoundExpanded ? '−' : '+'}
+                                  </span>
+                                </button>
                               </h3>
-                              <div className="flex flex-wrap gap-2">
+                            </div>
+
+                            <div
+                              hidden={!isRoundExpanded}
+                              id={`round-${round.id}-content`}
+                            >
+                              <div className="mb-4 mt-4 flex flex-wrap justify-end gap-2">
                                 <button
                                   aria-pressed={
                                     selectedTournament.activeRoundId === round.id
@@ -3523,14 +3684,16 @@ function TournamentWorkspace({
                                     tournamentIsClosed ||
                                     selectedTournament.activeRoundId === round.id
                                   }
-                                  onClick={() =>
+                                  onClick={() => {
+                                    pendingRoundScrollId.current = round.id
+                                    setExpandedRoundId(round.id)
                                     void updateSelectedTournament(
                                       (tournament) => ({
                                         ...tournament,
                                         activeRoundId: round.id,
                                       }),
                                     )
-                                  }
+                                  }}
                                   type="button"
                                 >
                                   {selectedTournament.activeRoundId === round.id
@@ -3558,7 +3721,6 @@ function TournamentWorkspace({
                                     : 'Añadir pod'}
                                 </button>
                               </div>
-                            </div>
 
                             {round.pods.length === 0 ? (
                               <p className="mb-4 rounded-lg border border-dashed border-slate-700 px-4 py-4 text-sm text-slate-400">
@@ -4007,6 +4169,7 @@ function TournamentWorkspace({
                                 </p>
                               )}
                             </aside>
+                            </div>
                           </section>
                         )
                       })}
