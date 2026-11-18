@@ -2824,7 +2824,7 @@ function TournamentWorkspace({
         <div className="grid gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:gap-8">
           <section
             aria-labelledby="create-tournament-heading"
-            className={`rounded-2xl border border-white/10 bg-slate-900/80 p-5 shadow-xl shadow-black/10 sm:p-7 ${
+            className={`${selectedTournament ? 'order-2' : 'order-1'} lg:order-1 rounded-2xl border border-white/10 bg-slate-900/80 p-5 shadow-xl shadow-black/10 sm:p-7 ${
               adminMode ? 'hidden' : ''
             }`}
           >
@@ -3022,7 +3022,7 @@ function TournamentWorkspace({
             aria-labelledby={
               isEditingTournament ? 'tournament-edit-heading' : 'players-heading'
             }
-            className="rounded-2xl border border-white/10 bg-slate-900/80 p-5 shadow-xl shadow-black/10 sm:p-7"
+            className={`${selectedTournament ? 'order-1' : 'order-2'} lg:order-2 rounded-2xl border border-white/10 bg-slate-900/80 p-5 shadow-xl shadow-black/10 sm:p-7`}
           >
             {selectedTournament ? (
               <>
