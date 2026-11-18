@@ -10,11 +10,19 @@ import type { Tournament } from '../lib/tournamentStorage'
 export default function TournamentResultProposals({
   tournament,
   closed = false,
+  summaryRoundId,
+  onPendingCountChange,
   saving,
   onApproved,
 }: {
   tournament: Tournament
   closed?: boolean
+  summaryRoundId: string | null
+  onPendingCountChange: (
+    tournamentId: string,
+    roundId: string | null,
+    count: number | null,
+  ) => void
   saving: boolean
   onApproved: (proposal: ResultProposal) => void
 }) {
@@ -27,8 +35,17 @@ export default function TournamentResultProposals({
     try {
       const loaded = await fetchTournamentResultProposals(tournament.id)
       setProposals(loaded)
+      onPendingCountChange(
+        tournament.id,
+        summaryRoundId,
+        summaryRoundId
+          ? loaded.filter((proposal) => proposal.roundId === summaryRoundId)
+              .length
+          : null,
+      )
       setError('')
     } catch (loadError: unknown) {
+      onPendingCountChange(tournament.id, summaryRoundId, null)
       setError(
         loadError instanceof Error
           ? loadError.message
@@ -37,35 +54,52 @@ export default function TournamentResultProposals({
     } finally {
       setLoading(false)
     }
-  }, [tournament.id])
+  }, [onPendingCountChange, summaryRoundId, tournament.id])
 
   useEffect(() => {
     let active = true
-    void fetchTournamentResultProposals(tournament.id)
-      .then((loaded) => {
+    const refreshProposals = async () => {
+      try {
+        const loaded = await fetchTournamentResultProposals(tournament.id)
         if (active) {
           setProposals(loaded)
           setError('')
+          onPendingCountChange(
+            tournament.id,
+            summaryRoundId,
+            summaryRoundId
+              ? loaded.filter((proposal) => proposal.roundId === summaryRoundId)
+                  .length
+              : null,
+          )
         }
-      })
-      .catch((loadError: unknown) => {
+      } catch (loadError: unknown) {
         if (active) {
+          onPendingCountChange(tournament.id, summaryRoundId, null)
           setError(
             loadError instanceof Error
               ? loadError.message
               : 'No se pudieron cargar las propuestas de resultado.',
           )
         }
-      })
-      .finally(() => {
+      } finally {
         if (active) {
           setLoading(false)
         }
-      })
+      }
+    }
+
+    onPendingCountChange(tournament.id, summaryRoundId, null)
+    void refreshProposals()
+    const intervalId = window.setInterval(() => {
+      void refreshProposals()
+    }, 15_000)
+
     return () => {
       active = false
+      window.clearInterval(intervalId)
     }
-  }, [tournament.id])
+  }, [onPendingCountChange, summaryRoundId, tournament.id])
 
   async function decide(proposal: ResultProposal, approve: boolean) {
     if (busyProposalId || saving || closed) {

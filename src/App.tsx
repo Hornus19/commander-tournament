@@ -1,6 +1,7 @@
 import {
   lazy,
   Suspense,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -1036,6 +1037,23 @@ function TournamentWorkspace({
   const [adminSaving, setAdminSaving] = useState(false)
   const [adminEditingRecord, setAdminEditingRecord] =
     useState<TournamentRecord | null>(null)
+  const [pendingProposalSummary, setPendingProposalSummary] = useState<{
+    tournamentId: string
+    roundId: string | null
+    count: number | null
+  } | null>(null)
+  const reportPendingProposalCount = useCallback(
+    (tournamentId: string, roundId: string | null, count: number | null) => {
+      setPendingProposalSummary((current) =>
+        current?.tournamentId === tournamentId &&
+        current.roundId === roundId &&
+        current.count === count
+          ? current
+          : { tournamentId, roundId, count },
+      )
+    },
+    [],
+  )
   const adminSaveLock = useRef(false)
   const latestTournaments = useRef(tournaments)
   const autoSyncEnabledRef = useRef(initialAutoSyncEnabled)
@@ -1098,6 +1116,41 @@ function TournamentWorkspace({
               : index + 1,
         }))
     : []
+  const controlRound = selectedTournament
+    ? selectedTournament.rounds.find(
+        ({ id }) => id === selectedTournament.activeRoundId,
+      ) ?? selectedTournament.rounds[selectedTournament.rounds.length - 1] ?? null
+    : null
+  const controlRoundNumber =
+    controlRound && selectedTournament
+      ? selectedTournament.rounds.findIndex(
+          ({ id }) => id === controlRound.id,
+        ) + 1
+      : 0
+  const controlRoundAssignedPlayerIds = new Set(
+    controlRound?.pods.flatMap((pod) => pod.playerIds) ?? [],
+  )
+  const controlRoundUnassignedCount = selectedTournament && controlRound
+    ? selectedTournament.players.filter(
+        (player) => !controlRoundAssignedPlayerIds.has(player.id),
+      ).length
+    : 0
+  const controlRoundResultsCount =
+    controlRound?.pods.filter((pod) => Boolean(pod.result)).length ?? 0
+  const currentRoundPendingCount =
+    pendingProposalSummary !== null &&
+    selectedTournament !== null &&
+    pendingProposalSummary.tournamentId === selectedTournament.id &&
+    pendingProposalSummary.roundId === controlRound?.id
+      ? pendingProposalSummary.count
+      : null
+  const nextRoundReadinessError =
+    selectedTournament && selectedTournament.rounds.length > 0
+      ? getPreviousRoundCompletionError(
+          selectedTournament,
+          selectedTournament.rounds.length,
+        )
+      : null
 
   useEffect(() => {
     if (!adminMode) {
@@ -3122,6 +3175,78 @@ function TournamentWorkspace({
                     </div>
                   </div>
 
+                  {controlRound && selectedTournament && (
+                    <section
+                      aria-label={`Resumen de la ronda ${controlRoundNumber}`}
+                      className="mb-5 rounded-xl border border-emerald-300/20 bg-emerald-300/5 p-4 sm:p-5"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="app-kicker text-xs font-semibold text-emerald-200">
+                            Estado de la ronda {controlRoundNumber}
+                          </p>
+                          <p className="mt-1 text-sm text-slate-300">
+                            {selectedTournament.activeRoundId === controlRound.id
+                              ? 'Esta ronda es la que se muestra en el QR.'
+                              : 'Ronda más reciente. Selecciónala para mostrarla en el QR.'}
+                          </p>
+                        </div>
+                        <span className="text-xs text-slate-400">
+                          Propuestas: actualización automática cada 15 s
+                        </span>
+                      </div>
+
+                      <dl className="mt-4 grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-lg border border-white/10 bg-slate-950/50 px-4 py-3">
+                          <dt className="text-sm text-slate-400">
+                            {selectedTournament.format === 'two-headed-giant'
+                              ? 'Mesas con resultado oficial'
+                              : 'Pods con resultado oficial'}
+                          </dt>
+                          <dd className="mt-1 text-2xl font-semibold text-white">
+                            {controlRoundResultsCount}/{controlRound.pods.length}
+                          </dd>
+                        </div>
+                        <div className="rounded-lg border border-white/10 bg-slate-950/50 px-4 py-3">
+                          <dt className="text-sm text-slate-400">
+                            Propuestas pendientes
+                          </dt>
+                          <dd className="mt-1 text-2xl font-semibold text-white">
+                            {currentRoundPendingCount ?? '…'}
+                          </dd>
+                        </div>
+                        <div className="rounded-lg border border-white/10 bg-slate-950/50 px-4 py-3">
+                          <dt className="text-sm text-slate-400">
+                            {selectedTournament.format === 'two-headed-giant'
+                              ? 'Parejas sin asignar'
+                              : 'Jugadores sin asignar'}
+                          </dt>
+                          <dd className="mt-1 text-2xl font-semibold text-white">
+                            {controlRoundUnassignedCount}
+                          </dd>
+                        </div>
+                      </dl>
+
+                      <p
+                        aria-live="polite"
+                        className={`mt-4 rounded-lg border px-4 py-3 text-sm ${
+                          tournamentIsClosed
+                            ? 'border-emerald-300/20 bg-emerald-300/5 text-emerald-100'
+                            : nextRoundReadinessError
+                              ? 'border-amber-300/20 bg-amber-300/5 text-amber-100'
+                              : 'border-emerald-300/20 bg-emerald-300/5 text-emerald-100'
+                        }`}
+                        role="status"
+                      >
+                        {tournamentIsClosed
+                          ? 'Torneo finalizado; el QR muestra la clasificación final.'
+                          : nextRoundReadinessError
+                            ? `Para generar la siguiente ronda: ${nextRoundReadinessError.replace('No se puede avanzar:', '').trim()}`
+                            : 'Rondas completas. Ya puedes generar la siguiente ronda; no hay un límite fijo.'}
+                      </p>
+                    </section>
+                  )}
+
                   {roundGenerationError && (
                     <p
                       className="mb-4 rounded-lg border border-rose-400/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-200"
@@ -3676,7 +3801,9 @@ function TournamentWorkspace({
                  <TournamentResultProposals
                    closed={tournamentIsClosed}
                    key={selectedTournament.id}
+                   onPendingCountChange={reportPendingProposalCount}
                    onApproved={applyApprovedProposal}
+                   summaryRoundId={controlRound?.id ?? null}
                    saving={adminSaving}
                    tournament={selectedTournament}
                  />
