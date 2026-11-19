@@ -2225,6 +2225,19 @@ function TournamentWorkspace({
       return
     }
 
+    if (roundId !== null && roundIndex < selectedTournament.rounds.length - 1) {
+      setRoundGenerationError(
+        'No se pueden regenerar las mesas de una ronda anterior cuando ya existe una ronda posterior.',
+      )
+      return
+    }
+    if (existingRound?.pods.some((pod) => pod.result)) {
+      setRoundGenerationError(
+        'No se pueden regenerar las mesas de una ronda que ya tiene resultados oficiales.',
+      )
+      return
+    }
+
     const previousRoundError = getPreviousRoundCompletionError(
       selectedTournament,
       roundIndex,
@@ -2232,6 +2245,19 @@ function TournamentWorkspace({
     if (previousRoundError) {
       setRoundGenerationError(previousRoundError)
       return
+    }
+
+    if (roundId !== null) {
+      const hasPendingProposal = await hasPendingResultProposal(roundId)
+      if (hasPendingProposal === null) {
+        return
+      }
+      if (hasPendingProposal) {
+        setRoundGenerationError(
+          'No se pueden regenerar las mesas mientras haya propuestas de resultado pendientes para esta ronda.',
+        )
+        return
+      }
     }
 
     const podSizes = getBalancedPodSizes(
@@ -2249,12 +2275,9 @@ function TournamentWorkspace({
 
     if (
       existingRound &&
-      (existingRound.pods.length > 0 ||
-        existingRound.pods.some(
-          (pod) => pod.playerIds.length > 0 || pod.result !== undefined,
-        )) &&
+      existingRound.pods.length > 0 &&
       !window.confirm(
-        'Esta ronda ya tiene mesas, asignaciones o resultados. Si continúas, se reemplazarán. ¿Quieres generar las mesas automáticamente?',
+        'Esta ronda ya tiene mesas o asignaciones. Si continúas, se reemplazarán. ¿Quieres generar las mesas automáticamente?',
       )
     ) {
       return
@@ -2299,7 +2322,7 @@ function TournamentWorkspace({
       playerIds: group,
     }))
     const generatedRoundId = roundId ?? crypto.randomUUID()
-    const startedAt = existingRound?.startedAt ?? new Date().toISOString()
+    const startedAt = new Date().toISOString()
     const previousExpandedRoundId = expandedRoundId
     if (roundId === null) {
       pendingRoundScrollId.current = generatedRoundId
@@ -4060,6 +4083,11 @@ function TournamentWorkspace({
                         const roundIsComplete =
                           getRoundCompletionError(selectedTournament, roundIndex) ===
                           null
+                        const roundHasResults = round.pods.some(
+                          (pod) => Boolean(pod.result),
+                        )
+                        const hasLaterRound =
+                          roundIndex < selectedTournament.rounds.length - 1
                         const assignedPlayerIds = new Set(
                           round.pods.flatMap((pod) => pod.playerIds),
                         )
@@ -4143,10 +4171,22 @@ function TournamentWorkspace({
                                     : 'Mostrar en QR'}
                                 </button>
                                 <button
-                                  className="rounded-md border border-amber-300/40 px-3 py-2 text-sm font-medium text-amber-200 transition hover:bg-amber-300/10"
-                                  disabled={adminSaving || tournamentIsClosed}
+                                  className="rounded-md border border-amber-300/40 px-3 py-2 text-sm font-medium text-amber-200 transition hover:bg-amber-300/10 disabled:cursor-not-allowed disabled:opacity-50"
+                                  disabled={
+                                    adminSaving ||
+                                    tournamentIsClosed ||
+                                    hasLaterRound ||
+                                    roundHasResults
+                                  }
                                   onClick={() =>
                                     void generateRoundAutomatically(round.id)
+                                  }
+                                  title={
+                                    hasLaterRound
+                                      ? 'No se pueden generar mesas en una ronda anterior cuando existe una ronda posterior.'
+                                      : roundHasResults
+                                        ? 'No se pueden regenerar las mesas de una ronda con resultados oficiales.'
+                                        : undefined
                                   }
                                   type="button"
                                 >
